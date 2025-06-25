@@ -6,19 +6,19 @@
 //
 
 import SwiftUI
+import AuthenticationServices
 
+// MARK: - Content View
 struct ContentView: View {
+    @EnvironmentObject var authViewModel: AuthenticationViewModel
+    
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        if authViewModel.isAuthenticated {
+            MainTabView()
+        } else {
+            LoginView()
         }
-        .padding()
     }
 }
 
-#Preview {
-    ContentView()
-}
+
