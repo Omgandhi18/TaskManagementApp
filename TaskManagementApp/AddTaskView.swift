@@ -81,9 +81,9 @@ struct AddTaskView: View {
             isCompleted: false,
             priority: priority,
             dueDate: hasDueDate ? dueDate : nil,
-            assignedTo: currentUser.id,
+            assignedTo: currentUser.id ?? "",
             groupID: selectedGroup?.id,
-            createdBy: currentUser.id,
+            createdBy: currentUser.id ?? "",
             createdAt: Date(),
             tags: []
         )
