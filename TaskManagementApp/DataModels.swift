@@ -11,6 +11,18 @@ import FirebaseFirestore
 import FirebaseAuth
 
 // MARK: - Data Models
+enum TaskStatus: String, CaseIterable, Codable {
+    case todo = "To Do"
+    case inProgress = "In Progress"
+    case completed = "Completed"
+}
+
+// Also add TaskPriority if it doesn't exist
+enum TaskPriority: String, CaseIterable, Codable {
+    case low = "Low"
+    case medium = "Medium"
+    case high = "High"
+}
 struct User: Identifiable, Codable, Hashable {
     @DocumentID var id: String?
     var name: String
@@ -96,6 +108,8 @@ struct Task: Identifiable, Codable, Hashable {
     var subtasks: [Subtask]
     var attachments: [TaskAttachment]
     var comments: [TaskComment]
+    var color: String
+    var status: TaskStatus = .todo
     
     enum Priority: String, CaseIterable, Codable, Hashable {
         case low = "Low"
@@ -137,6 +151,8 @@ struct Task: Identifiable, Codable, Hashable {
         self.subtasks = []
         self.attachments = []
         self.comments = []
+        self.color = priority.color.description
+        self.status = .todo
     }
     
     func hash(into hasher: inout Hasher) {
@@ -304,14 +320,24 @@ class AuthenticationViewModel: ObservableObject {
         let newUser = User(name: name, email: email, appleUserID: appleUserID)
         
         do {
-            let userData = try Firestore.Encoder().encode(newUser)
-            db.collection("users").addDocument(data: userData) { [weak self] error in
+            // Create a new document with auto ID
+            let newDocRef = db.collection("users").document()
+            var userData = try Firestore.Encoder().encode(newUser)
+            
+            // Update the user with the document ID
+            var userWithId = newUser
+            userWithId.id = newDocRef.documentID
+            userData = try Firestore.Encoder().encode(userWithId)
+            
+            newDocRef.setData(userData) { [weak self] error in
                 if let error = error {
                     print("Error creating user: \(error)")
                 } else {
                     DispatchQueue.main.async {
-                        self?.currentUser = newUser
+                        self?.currentUser = userWithId
                         self?.isAuthenticated = true
+                        // Set online status when user signs in
+                        self?.updateUserStatus(isOnline: true)
                     }
                 }
             }
@@ -319,8 +345,24 @@ class AuthenticationViewModel: ObservableObject {
             print("Error encoding user: \(error)")
         }
     }
+    func updateUserStatus(isOnline: Bool) {
+        guard let userId = currentUser?.id else { return }
+        
+        let updates: [String: Any] = [
+            "isOnline": isOnline,
+            "lastSeen": Timestamp(date: Date())
+        ]
+        
+        db.collection("users").document(userId).updateData(updates) { error in
+            if let error = error {
+                print("Error updating user status: \(error)")
+            }
+        }
+    }
+    
     
     func signOut() {
+        updateUserStatus(isOnline: false)
         currentUser = nil
         isAuthenticated = false
     }
@@ -515,7 +557,25 @@ class TaskViewModel: ObservableObject {
                 }
             }
     }
+    func loadGroupMembers(for group: TaskGroup, completion: @escaping (TaskGroup) -> Void) {
+        guard !group.memberIDs.isEmpty else {
+            completion(group)
+            return
+        }
+        
+        db.collection("users")
+            .whereField(FieldPath.documentID(), in: group.memberIDs)
+            .getDocuments { snapshot, error in
+                var updatedGroup = group
+                if let documents = snapshot?.documents {
+                    updatedGroup.members = documents.compactMap { try? $0.data(as: User.self) }
+                }
+                completion(updatedGroup)
+            }
+    }
     
+    
+    // Update fetchGroups method:
     func fetchGroups(for userId: String) {
         db.collection("groups")
             .whereField("memberIDs", arrayContains: userId)
@@ -525,10 +585,22 @@ class TaskViewModel: ObservableObject {
                     return
                 }
                 
-                DispatchQueue.main.async {
-                    self?.groups = documents.compactMap { document in
-                        try? document.data(as: TaskGroup.self)
+                let groups = documents.compactMap { try? $0.data(as: TaskGroup.self) }
+                
+                // Load members for each group
+                let dispatchGroup = DispatchGroup()
+                var updatedGroups: [TaskGroup] = []
+                
+                for group in groups {
+                    dispatchGroup.enter()
+                    self?.loadGroupMembers(for: group) { updatedGroup in
+                        updatedGroups.append(updatedGroup)
+                        dispatchGroup.leave()
                     }
+                }
+                
+                dispatchGroup.notify(queue: .main) {
+                    self?.groups = updatedGroups
                 }
             }
     }
@@ -553,7 +625,107 @@ class TaskViewModel: ObservableObject {
                 }
             }
     }
+    func joinGroupWithInviteCode(_ inviteCode: String, completion: @escaping (Result<TaskGroup, Error>) -> Void) {
+        guard let currentUser = AuthenticationViewModel().currentUser,
+              let userId = currentUser.id else {
+            completion(.failure(NSError(domain: "", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])))
+            return
+        }
+        
+        db.collection("groups")
+            .whereField("inviteCode", isEqualTo: inviteCode)
+            .getDocuments { [weak self] snapshot, error in
+                if let error = error {
+                    completion(.failure(error))
+                    return
+                }
+                
+                guard let document = snapshot?.documents.first else {
+                    completion(.failure(NSError(domain: "", code: 404, userInfo: [NSLocalizedDescriptionKey: "Group not found"])))
+                    return
+                }
+                
+                do {
+                    var group = try document.data(as: TaskGroup.self)
+                    
+                    // Check if user is already a member
+                    if group.memberIDs.contains(userId) {
+                        completion(.failure(NSError(domain: "", code: 409, userInfo: [NSLocalizedDescriptionKey: "Already a member"])))
+                        return
+                    }
+                    
+                    // Add user to group
+                    group.memberIDs.append(userId)
+                    group.members.append(currentUser)
+                    
+                    // Update Firestore
+                    let groupRef = document.reference
+                    try groupRef.updateData([
+                        "memberIDs": FieldValue.arrayUnion([userId])
+                    ])
+                    
+                    // Update local groups array
+                    DispatchQueue.main.async {
+                        if let index = self?.groups.firstIndex(where: { $0.id == group.id }) {
+                            self?.groups[index] = group
+                        } else {
+                            self?.groups.append(group)
+                        }
+                        completion(.success(group))
+                    }
+                    
+                } catch {
+                    completion(.failure(error))
+                }
+            }
+    }
+    func getGroupInviteLink(for group: TaskGroup) -> String? {
+        guard let groupId = group.id else { return nil }
+        
+        // Create a deep link format - you'll need to set up Firebase Dynamic Links separately
+        // This is a simplified version
+        return "taskapp://join?code=\(group.inviteCode)&groupId=\(groupId)"
+    }
     
+    func assignTaskToUser(_ task: Task, userId: String, userName: String) {
+        guard let taskId = task.id else { return }
+        
+        var updatedTask = task
+        updatedTask.assignedTo = userId
+        updatedTask.updatedAt = Date()
+        
+        do {
+            let taskData = try Firestore.Encoder().encode(updatedTask)
+            
+            db.collection("tasks").document(taskId).setData(taskData) { [weak self] error in
+                if let error = error {
+                    print("Error assigning task: \(error)")
+                    return
+                }
+                
+                // Update local array
+                DispatchQueue.main.async {
+                    if let index = self?.tasks.firstIndex(where: { $0.id == taskId }) {
+                        self?.tasks[index] = updatedTask
+                    }
+                }
+                
+                // Create a notification for the assigned user
+                var notification = Notification(
+                    title: "New Task Assigned",
+                    message: "You have been assigned a new task: \(task.title)",
+                    type: .taskAssigned,
+                    recipientID: userId,
+                    senderID: task.createdBy,
+                )
+                notification.relatedTaskID = taskId
+                
+                self?.createNotification(notification)
+            }
+        } catch {
+            print("Error encoding task: \(error)")
+        }
+    }
     // MARK: - User Search
     func searchUsers(by email: String, completion: @escaping (Result<[User], Error>) -> Void) {
         db.collection("users")
@@ -571,4 +743,149 @@ class TaskViewModel: ObservableObject {
                 completion(.success(users))
             }
     }
+    // Function to create notifications
+    func createNotification(_ notification: Notification) {
+        do {
+            let notificationData = try Firestore.Encoder().encode(notification)
+            db.collection("notifications").addDocument(data: notificationData) { error in
+                if let error = error {
+                    print("Error creating notification: \(error)")
+                }
+            }
+        } catch {
+            print("Error encoding notification: \(error)")
+        }
+    }
+    
+    // Function to fetch user notifications
+    func fetchNotifications(for userId: String, completion: @escaping ([Notification]) -> Void) {
+        db.collection("notifications")
+            .whereField("recipientID", isEqualTo: userId)
+            .order(by: "createdAt", descending: true)
+            .limit(to: 30) // Limit to recent notifications
+            .getDocuments { snapshot, error in
+                if let error = error {
+                    print("Error fetching notifications: \(error)")
+                    completion([])
+                    return
+                }
+                
+                let notifications = snapshot?.documents.compactMap { try? $0.data(as: Notification.self) } ?? []
+                completion(notifications)
+            }
+    }
+    
+    // Function to fetch all tasks assigned to a user, including group tasks
+    func fetchAllUserTasks(for userId: String) {
+        // First fetch personal tasks
+        db.collection("tasks")
+            .whereField("assignedTo", isEqualTo: userId)
+            .addSnapshotListener { [weak self] snapshot, error in
+                guard let documents = snapshot?.documents else {
+                    print("Error fetching tasks: \(error?.localizedDescription ?? "Unknown error")")
+                    return
+                }
+                
+                let personalTasks = documents.compactMap { try? $0.data(as: Task.self) }
+                
+                // Then fetch group tasks where the user is a member
+                self?.db.collection("groups")
+                    .whereField("memberIDs", arrayContains: userId)
+                    .getDocuments { snapshot, error in
+                        guard let groupDocuments = snapshot?.documents else {
+                            // If we can't get groups, just update with personal tasks
+                            DispatchQueue.main.async {
+                                self?.tasks = personalTasks
+                            }
+                            return
+                        }
+                        
+                        let groupIds = groupDocuments.compactMap { document -> String? in
+                            return document.documentID
+                        }
+                        
+                        if groupIds.isEmpty {
+                            DispatchQueue.main.async {
+                                self?.tasks = personalTasks
+                            }
+                            return
+                        }
+                        
+                        // Get all tasks for these groups
+                        self?.db.collection("tasks")
+                            .whereField("groupID", in: groupIds)
+                            .getDocuments { snapshot, error in
+                                let groupTasks = snapshot?.documents.compactMap {
+                                    try? $0.data(as: Task.self)
+                                } ?? []
+                                
+                                // Combine personal and group tasks
+                                DispatchQueue.main.async {
+                                    // Use a Set to avoid duplicates
+                                    var uniqueTasks: [Task] = []
+                                    let allTasks = personalTasks + groupTasks
+                                    
+                                    for task in allTasks {
+                                        if !uniqueTasks.contains(where: { $0.id == task.id }) {
+                                            uniqueTasks.append(task)
+                                        }
+                                    }
+                                    
+                                    self?.tasks = uniqueTasks
+                                }
+                            }
+                    }
+            }
+    }
+    func getUserName(for userId: String?) -> String? {
+        guard let userId = userId else { return nil }
+        
+        // First check if user is in any loaded groups
+        for group in groups {
+            if let member = group.members.first(where: { $0.id == userId }) {
+                return member.name
+            }
+        }
+        
+        // Otherwise return a placeholder
+        return "User"
+    }
+    
+    func getGroup(for groupId: String?) -> TaskGroup? {
+        guard let groupId = groupId else { return nil }
+        return groups.first(where: { $0.id == groupId })
+    }
+    
+    func getAllUsers(completion: @escaping ([User]) -> Void) {
+        db.collection("users").getDocuments { snapshot, error in
+            if let error = error {
+                print("Error fetching users: \(error)")
+                completion([])
+                return
+            }
+            
+            let users = snapshot?.documents.compactMap { try? $0.data(as: User.self) } ?? []
+            completion(users)
+        }
+    }
+    func startListening(for userId: String) {
+        // Listen to all tasks user has access to
+        fetchAllUserTasks(for: userId)
+        
+        // Listen to user's groups
+        fetchGroups(for: userId)
+        
+        // Listen to notifications
+        listenToNotifications(for: userId)
+    }
+    
+    func listenToNotifications(for userId: String) {
+        db.collection("notifications")
+            .whereField("recipientID", isEqualTo: userId)
+            .whereField("isRead", isEqualTo: false)
+            .addSnapshotListener { snapshot, error in
+                // Handle new notifications
+            }
+    }
+    
 }
