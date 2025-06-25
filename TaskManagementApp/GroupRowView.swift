@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+
 // MARK: - Group Row View
 struct GroupRowView: View {
     let group: TaskGroup
@@ -19,7 +20,7 @@ struct GroupRowView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Circle()
-                    .fill(Color(group.color) ?? .blue)
+                    .fill(Color(hex: group.color) ?? .blue)
                     .frame(width: 12, height: 12)
                 
                 Text(group.name)
@@ -52,4 +53,3 @@ struct GroupRowView: View {
         .padding(.vertical, 4)
     }
 }
-

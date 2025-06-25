@@ -65,13 +65,14 @@ struct AddGroupView: View {
     }
     
     func createGroup() {
-        guard let currentUser = authViewModel.currentUser else { return }
+        guard let currentUser = authViewModel.currentUser,
+              let userId = currentUser.id else { return }
         
         let newGroup = TaskGroup(
             name: name,
             description: description,
             members: [currentUser],
-            adminID: currentUser.id,
+            adminID: userId,
             createdAt: Date(),
             color: selectedColor
         )
@@ -80,4 +81,3 @@ struct AddGroupView: View {
         presentationMode.wrappedValue.dismiss()
     }
 }
-

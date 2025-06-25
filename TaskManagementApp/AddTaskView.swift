@@ -73,7 +73,8 @@ struct AddTaskView: View {
     }
     
     func saveTask() {
-        guard let currentUser = authViewModel.currentUser else { return }
+        guard let currentUser = authViewModel.currentUser,
+              let userId = currentUser.id else { return }
         
         let newTask = Task(
             title: title,
@@ -81,9 +82,9 @@ struct AddTaskView: View {
             isCompleted: false,
             priority: priority,
             dueDate: hasDueDate ? dueDate : nil,
-            assignedTo: currentUser.id ?? "",
+            assignedTo: userId,
             groupID: selectedGroup?.id,
-            createdBy: currentUser.id ?? "",
+            createdBy: userId,
             createdAt: Date(),
             tags: []
         )
@@ -92,4 +93,3 @@ struct AddTaskView: View {
         presentationMode.wrappedValue.dismiss()
     }
 }
-

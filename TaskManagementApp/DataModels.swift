@@ -54,18 +54,19 @@ struct TaskGroup: Identifiable, Codable, Hashable {
     // Computed property for members (fetch from Firestore when needed)
     var members: [User] = []
     
-    init(name: String, description: String, adminID: String, color: String) {
+    init(name: String, description: String, members: [User], adminID: String, createdAt: Date, color: String) {
         self.name = name
         self.description = description
-        self.memberIDs = [adminID]
+        self.memberIDs = members.compactMap { $0.id }
         self.adminID = adminID
-        self.createdAt = Date()
+        self.createdAt = createdAt
         self.color = color
-        self.inviteCode = generateInviteCode()
+        self.inviteCode = Self.generateInviteCode()
         self.isPrivate = false
+        self.members = members
     }
     
-    private func generateInviteCode() -> String {
+    private static func generateInviteCode() -> String {
         let characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
         return String((0..<8).map { _ in characters.randomElement()! })
     }
@@ -86,9 +87,9 @@ struct Task: Identifiable, Codable, Hashable {
     var isCompleted: Bool
     var priority: Priority
     var dueDate: Date?
-    var assignedToID: String // User ID
+    var assignedTo: String // User ID - fixed property name
     var groupID: String? // Optional - for group tasks
-    var createdByID: String
+    var createdBy: String // User ID - fixed property name
     var createdAt: Date
     var updatedAt: Date
     var tags: [String]
@@ -121,18 +122,18 @@ struct Task: Identifiable, Codable, Hashable {
         }
     }
     
-    init(title: String, description: String, priority: Priority, assignedToID: String, createdByID: String, groupID: String? = nil) {
+    init(title: String, description: String, isCompleted: Bool, priority: Priority, dueDate: Date?, assignedTo: String, groupID: String?, createdBy: String, createdAt: Date, tags: [String]) {
         self.title = title
         self.description = description
-        self.isCompleted = false
+        self.isCompleted = isCompleted
         self.priority = priority
-        self.dueDate = nil
-        self.assignedToID = assignedToID
+        self.dueDate = dueDate
+        self.assignedTo = assignedTo
         self.groupID = groupID
-        self.createdByID = createdByID
-        self.createdAt = Date()
+        self.createdBy = createdBy
+        self.createdAt = createdAt
         self.updatedAt = Date()
-        self.tags = []
+        self.tags = tags
         self.subtasks = []
         self.attachments = []
         self.comments = []
@@ -247,10 +248,13 @@ struct TaskAnalytics: Codable {
         self.averageCompletionTime = 0.0
     }
 }
+
 // MARK: - View Models
 class AuthenticationViewModel: ObservableObject {
     @Published var isAuthenticated = false
     @Published var currentUser: User?
+    
+    private let db = Firestore.firestore()
     
     func signInWithApple(result: Result<ASAuthorization, Error>) {
         switch result {
@@ -261,18 +265,58 @@ class AuthenticationViewModel: ObservableObject {
                 let fullName = appleIDCredential.fullName
                 let name = "\(fullName?.givenName ?? "") \(fullName?.familyName ?? "")".trimmingCharacters(in: .whitespaces)
                 
-                // Create user object
-                let user = User(name: name.isEmpty ? "Apple User" : name,
-                               email: email,
-                               appleUserID: userID)
-                
-                DispatchQueue.main.async {
-                    self.currentUser = user
-                    self.isAuthenticated = true
-                }
+                // Check if user exists in Firestore
+                checkUserExists(appleUserID: userID, name: name.isEmpty ? "Apple User" : name, email: email)
             }
         case .failure(let error):
             print("Apple Sign In failed: \(error.localizedDescription)")
+        }
+    }
+    
+    private func checkUserExists(appleUserID: String, name: String, email: String) {
+        db.collection("users").whereField("appleUserID", isEqualTo: appleUserID).getDocuments { [weak self] snapshot, error in
+            if let error = error {
+                print("Error checking user: \(error)")
+                return
+            }
+            
+            if let documents = snapshot?.documents, !documents.isEmpty {
+                // User exists, load their data
+                if let userData = documents.first {
+                    do {
+                        let user = try userData.data(as: User.self)
+                        DispatchQueue.main.async {
+                            self?.currentUser = user
+                            self?.isAuthenticated = true
+                        }
+                    } catch {
+                        print("Error decoding user: \(error)")
+                    }
+                }
+            } else {
+                // New user, create account
+                self?.createNewUser(appleUserID: appleUserID, name: name, email: email)
+            }
+        }
+    }
+    
+    private func createNewUser(appleUserID: String, name: String, email: String) {
+        let newUser = User(name: name, email: email, appleUserID: appleUserID)
+        
+        do {
+            let userData = try Firestore.Encoder().encode(newUser)
+            db.collection("users").addDocument(data: userData) { [weak self] error in
+                if let error = error {
+                    print("Error creating user: \(error)")
+                } else {
+                    DispatchQueue.main.async {
+                        self?.currentUser = newUser
+                        self?.isAuthenticated = true
+                    }
+                }
+            }
+        } catch {
+            print("Error encoding user: \(error)")
         }
     }
     
@@ -291,11 +335,6 @@ class TaskViewModel: ObservableObject {
     
     private let db = Firestore.firestore()
     
-    init() {
-        fetchTasks()
-        fetchGroups()
-    }
-    
     // MARK: - Task Methods
     func addTask(_ task: Task) {
         isLoading = true
@@ -307,7 +346,7 @@ class TaskViewModel: ObservableObject {
         do {
             let taskData = try Firestore.Encoder().encode(task)
             
-            db.collection("tasks").document(task.id.uuidString).setData(taskData) { [weak self] error in
+            db.collection("tasks").addDocument(data: taskData) { [weak self] error in
                 DispatchQueue.main.async {
                     self?.isLoading = false
                     if let error = error {
@@ -329,10 +368,12 @@ class TaskViewModel: ObservableObject {
         tasks.removeAll { $0.id == task.id }
         
         // Remove from Firestore
-        db.collection("tasks").document(task.id.uuidString).delete { error in
-            if let error = error {
-                print("Error deleting task: \(error)")
-                // Could add back to local array if needed
+        if let taskId = task.id {
+            db.collection("tasks").document(taskId).delete { error in
+                if let error = error {
+                    print("Error deleting task: \(error)")
+                    // Could add back to local array if needed
+                }
             }
         }
     }
@@ -341,26 +382,29 @@ class TaskViewModel: ObservableObject {
         // Find and update in local array
         if let index = tasks.firstIndex(where: { $0.id == task.id }) {
             tasks[index].isCompleted.toggle()
+            tasks[index].updatedAt = Date()
             let updatedTask = tasks[index]
             
             // Update in Firestore
-            do {
-                let taskData = try Firestore.Encoder().encode(updatedTask)
-                db.collection("tasks").document(task.id.uuidString).setData(taskData) { error in
-                    if let error = error {
-                        print("Error updating task: \(error)")
-                        // Revert local change if Firebase update fails
-                        DispatchQueue.main.async {
-                            if let index = self.tasks.firstIndex(where: { $0.id == task.id }) {
-                                self.tasks[index].isCompleted.toggle()
+            if let taskId = updatedTask.id {
+                do {
+                    let taskData = try Firestore.Encoder().encode(updatedTask)
+                    db.collection("tasks").document(taskId).setData(taskData) { error in
+                        if let error = error {
+                            print("Error updating task: \(error)")
+                            // Revert local change if Firebase update fails
+                            DispatchQueue.main.async {
+                                if let index = self.tasks.firstIndex(where: { $0.id == task.id }) {
+                                    self.tasks[index].isCompleted.toggle()
+                                }
                             }
                         }
                     }
+                } catch {
+                    print("Error encoding task: \(error)")
+                    // Revert local change
+                    tasks[index].isCompleted.toggle()
                 }
-            } catch {
-                print("Error encoding task: \(error)")
-                // Revert local change
-                tasks[index].isCompleted.toggle()
             }
         }
     }
@@ -369,15 +413,17 @@ class TaskViewModel: ObservableObject {
         if let index = tasks.firstIndex(where: { $0.id == task.id }) {
             tasks[index] = task
             
-            do {
-                let taskData = try Firestore.Encoder().encode(task)
-                db.collection("tasks").document(task.id.uuidString).setData(taskData) { error in
-                    if let error = error {
-                        print("Error updating task: \(error)")
+            if let taskId = task.id {
+                do {
+                    let taskData = try Firestore.Encoder().encode(task)
+                    db.collection("tasks").document(taskId).setData(taskData) { error in
+                        if let error = error {
+                            print("Error updating task: \(error)")
+                        }
                     }
+                } catch {
+                    print("Error encoding task: \(error)")
                 }
-            } catch {
-                print("Error encoding task: \(error)")
             }
         }
     }
@@ -390,7 +436,7 @@ class TaskViewModel: ObservableObject {
         do {
             let groupData = try Firestore.Encoder().encode(group)
             
-            db.collection("groups").document(group.id.uuidString).setData(groupData) { [weak self] error in
+            db.collection("groups").addDocument(data: groupData) { [weak self] error in
                 DispatchQueue.main.async {
                     self?.isLoading = false
                     if let error = error {
@@ -411,47 +457,51 @@ class TaskViewModel: ObservableObject {
         tasks.removeAll { $0.groupID == group.id }
         
         // Delete from Firestore
-        db.collection("groups").document(group.id.uuidString).delete { error in
-            if let error = error {
-                print("Error deleting group: \(error)")
+        if let groupId = group.id {
+            db.collection("groups").document(groupId).delete { error in
+                if let error = error {
+                    print("Error deleting group: \(error)")
+                }
             }
-        }
-        
-        // Delete all tasks in this group
-        db.collection("tasks").whereField("groupID", isEqualTo: group.id.uuidString).getDocuments { snapshot, error in
-            if let documents = snapshot?.documents {
-                for document in documents {
-                    document.reference.delete()
+            
+            // Delete all tasks in this group
+            db.collection("tasks").whereField("groupID", isEqualTo: groupId).getDocuments { snapshot, error in
+                if let documents = snapshot?.documents {
+                    for document in documents {
+                        document.reference.delete()
+                    }
                 }
             }
         }
     }
     
     func addMemberToGroup(_ group: TaskGroup, member: User) {
-        if let index = groups.firstIndex(where: { $0.id == group.id }) {
-            if !groups[index].members.contains(member) {
+        if let index = groups.firstIndex(where: { $0.id == group.id }),
+           let memberId = member.id {
+            if !groups[index].memberIDs.contains(memberId) {
+                groups[index].memberIDs.append(memberId)
                 groups[index].members.append(member)
                 
-                do {
-                    let groupData = try Firestore.Encoder().encode(groups[index])
-                    db.collection("groups").document(group.id.uuidString).setData(groupData) { error in
-                        if let error = error {
-                            print("Error adding member to group: \(error)")
+                if let groupId = group.id {
+                    do {
+                        let groupData = try Firestore.Encoder().encode(groups[index])
+                        db.collection("groups").document(groupId).setData(groupData) { error in
+                            if let error = error {
+                                print("Error adding member to group: \(error)")
+                            }
                         }
+                    } catch {
+                        print("Error encoding group: \(error)")
                     }
-                } catch {
-                    print("Error encoding group: \(error)")
                 }
             }
         }
     }
     
     // MARK: - Fetch Methods
-    func fetchTasks() {
-        guard let currentUser = Auth.auth().currentUser else { return }
-        
+    func fetchTasks(for userId: String) {
         db.collection("tasks")
-            .whereField("assignedTo", isEqualTo: currentUser.uid)
+            .whereField("assignedTo", isEqualTo: userId)
             .addSnapshotListener { [weak self] snapshot, error in
                 guard let documents = snapshot?.documents else {
                     print("Error fetching tasks: \(error?.localizedDescription ?? "Unknown error")")
@@ -466,11 +516,9 @@ class TaskViewModel: ObservableObject {
             }
     }
     
-    func fetchGroups() {
-        guard let currentUser = Auth.auth().currentUser else { return }
-        
+    func fetchGroups(for userId: String) {
         db.collection("groups")
-            .whereField("members", arrayContains: currentUser.uid)
+            .whereField("memberIDs", arrayContains: userId)
             .addSnapshotListener { [weak self] snapshot, error in
                 guard let documents = snapshot?.documents else {
                     print("Error fetching groups: \(error?.localizedDescription ?? "Unknown error")")
