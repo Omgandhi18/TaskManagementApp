@@ -39,6 +39,16 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         return false
     }
+    
+    // Handle app becoming active
+    func applicationDidBecomeActive(_ application: UIApplication) {
+        NotificationCenter.default.post(name: NSNotification.Name("AppDidBecomeActive"), object: nil)
+    }
+    
+    // Handle app going to background
+    func applicationDidEnterBackground(_ application: UIApplication) {
+        NotificationCenter.default.post(name: NSNotification.Name("AppDidEnterBackground"), object: nil)
+    }
 }
 
 @main
@@ -46,6 +56,7 @@ struct TaskManagementAppApp: App {
     @StateObject private var authViewModel = AuthenticationViewModel()
     @StateObject private var taskViewModel = TaskViewModel()
     @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
+    @Environment(\.scenePhase) private var scenePhase
     
     var body: some Scene {
         WindowGroup {
@@ -68,8 +79,35 @@ struct TaskManagementAppApp: App {
                         processPendingInviteCode()
                     }
                     
+                    // Listen for app lifecycle events
+                    NotificationCenter.default.addObserver(forName: NSNotification.Name("AppDidBecomeActive"), object: nil, queue: .main) { _ in
+                        if authViewModel.isAuthenticated {
+                            authViewModel.updateUserStatus(isOnline: true)
+                        }
+                    }
+                    
+                    NotificationCenter.default.addObserver(forName: NSNotification.Name("AppDidEnterBackground"), object: nil, queue: .main) { _ in
+                        if authViewModel.isAuthenticated {
+                            authViewModel.updateUserStatus(isOnline: false)
+                        }
+                    }
+                    
                     // Check for pending invite code from deep link
                     processPendingInviteCode()
+                }
+                .onChange(of: scenePhase) { newPhase in
+                    switch newPhase {
+                    case .active:
+                        if authViewModel.isAuthenticated {
+                            authViewModel.updateUserStatus(isOnline: true)
+                        }
+                    case .background, .inactive:
+                        if authViewModel.isAuthenticated {
+                            authViewModel.updateUserStatus(isOnline: false)
+                        }
+                    @unknown default:
+                        break
+                    }
                 }
         }
     }

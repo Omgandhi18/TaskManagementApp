@@ -269,8 +269,92 @@ struct TaskAnalytics: Codable {
 class AuthenticationViewModel: ObservableObject {
     @Published var isAuthenticated = false
     @Published var currentUser: User?
+    @Published var isLoading = true // Add loading state
     
     private let db = Firestore.firestore()
+    
+    init() {
+        checkExistingAuthentication()
+    }
+    
+    // Check for existing authentication on app launch
+    private func checkExistingAuthentication() {
+        // First check if we have stored user credentials
+        if let storedUserID = UserDefaults.standard.string(forKey: "appleUserID"),
+           let storedUserData = UserDefaults.standard.data(forKey: "currentUser") {
+            
+            // Try to decode stored user
+            if let decodedUser = try? JSONDecoder().decode(User.self, from: storedUserData) {
+                // Verify the user still exists in Firestore and update their data
+                verifyStoredUser(user: decodedUser, appleUserID: storedUserID)
+            } else {
+                // Clear corrupted data and show login
+                clearStoredCredentials()
+                isLoading = false
+            }
+        } else {
+            // No stored credentials, show login
+            isLoading = false
+        }
+    }
+    
+    private func verifyStoredUser(user: User, appleUserID: String) {
+        guard let userID = user.id else {
+            clearStoredCredentials()
+            isLoading = false
+            return
+        }
+        
+        // Check if user still exists in Firestore
+        db.collection("users").document(userID).getDocument { [weak self] document, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    print("Error verifying user: \(error)")
+                    self?.clearStoredCredentials()
+                    self?.isLoading = false
+                    return
+                }
+                
+                if let document = document, document.exists {
+                    // User exists, update with latest data from Firestore
+                    do {
+                        let updatedUser = try document.data(as: User.self)
+                        self?.currentUser = updatedUser
+                        self?.isAuthenticated = true
+                        self?.updateUserStatus(isOnline: true)
+                        
+                        // Update stored user data
+                        self?.storeUserCredentials(user: updatedUser, appleUserID: appleUserID)
+                    } catch {
+                        print("Error decoding updated user: \(error)")
+                        // Use stored user data as fallback
+                        self?.currentUser = user
+                        self?.isAuthenticated = true
+                        self?.updateUserStatus(isOnline: true)
+                    }
+                } else {
+                    // User no longer exists in Firestore
+                    print("User no longer exists in Firestore")
+                    self?.clearStoredCredentials()
+                }
+                
+                self?.isLoading = false
+            }
+        }
+    }
+    
+    private func storeUserCredentials(user: User, appleUserID: String) {
+        UserDefaults.standard.set(appleUserID, forKey: "appleUserID")
+        
+        if let encodedUser = try? JSONEncoder().encode(user) {
+            UserDefaults.standard.set(encodedUser, forKey: "currentUser")
+        }
+    }
+    
+    private func clearStoredCredentials() {
+        UserDefaults.standard.removeObject(forKey: "appleUserID")
+        UserDefaults.standard.removeObject(forKey: "currentUser")
+    }
     
     func signInWithApple(result: Result<ASAuthorization, Error>) {
         switch result {
@@ -304,6 +388,10 @@ class AuthenticationViewModel: ObservableObject {
                         DispatchQueue.main.async {
                             self?.currentUser = user
                             self?.isAuthenticated = true
+                            self?.updateUserStatus(isOnline: true)
+                            
+                            // Store credentials for auto-login
+                            self?.storeUserCredentials(user: user, appleUserID: appleUserID)
                         }
                     } catch {
                         print("Error decoding user: \(error)")
@@ -336,6 +424,10 @@ class AuthenticationViewModel: ObservableObject {
                     DispatchQueue.main.async {
                         self?.currentUser = userWithId
                         self?.isAuthenticated = true
+                        
+                        // Store credentials for auto-login
+                        self?.storeUserCredentials(user: userWithId, appleUserID: appleUserID)
+                        
                         // Set online status when user signs in
                         self?.updateUserStatus(isOnline: true)
                     }
@@ -345,6 +437,7 @@ class AuthenticationViewModel: ObservableObject {
             print("Error encoding user: \(error)")
         }
     }
+    
     func updateUserStatus(isOnline: Bool) {
         guard let userId = currentUser?.id else { return }
         
@@ -360,9 +453,9 @@ class AuthenticationViewModel: ObservableObject {
         }
     }
     
-    
     func signOut() {
         updateUserStatus(isOnline: false)
+        clearStoredCredentials()
         currentUser = nil
         isAuthenticated = false
     }

@@ -18,7 +18,7 @@ struct LoginView: View {
                     .font(.system(size: 80))
                     .foregroundColor(.blue)
                 
-                Text("TaskManager")
+                Text("Hive Task")
                     .font(.largeTitle)
                     .fontWeight(.bold)
                 
