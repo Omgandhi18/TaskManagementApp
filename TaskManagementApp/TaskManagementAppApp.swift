@@ -10,7 +10,7 @@ import FirebaseCore
 
 class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
-                    didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         FirebaseApp.configure()
         return true
     }
@@ -52,6 +52,16 @@ struct TaskManagementAppApp: App {
             ContentView()
                 .environmentObject(authViewModel)
                 .environmentObject(taskViewModel)
+                .onReceive(authViewModel.$currentUser) { user in
+                    // Start listening when user is authenticated
+                    if let userId = user?.id {
+                        taskViewModel.startListening(for: userId)
+                    } else {
+                        // Stop listening when user logs out
+                        taskViewModel.tasks = []
+                        taskViewModel.groups = []
+                    }
+                }
                 .onAppear {
                     // Listen for deep link notification
                     NotificationCenter.default.addObserver(forName: NSNotification.Name("ProcessInviteCode"), object: nil, queue: .main) { _ in

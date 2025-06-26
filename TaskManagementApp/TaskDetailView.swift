@@ -6,7 +6,6 @@ struct TaskDetailView: View {
     @Environment(\.presentationMode) var presentationMode
     @State private var task: Task
     @State private var isEditing = false
-    @State private var showingAssignSheet = false
     @State private var showingDeleteConfirmation = false
     
     init(task: Task) {
@@ -18,10 +17,6 @@ struct TaskDetailView: View {
             VStack(alignment: .leading, spacing: 20) {
                 // Task header
                 HStack {
-                    Circle()
-                        .fill(Color(hex: task.color) ?? .blue)
-                        .frame(width: 16, height: 16)
-                    
                     Text(task.priority.rawValue)
                         .font(.subheadline)
                         .foregroundColor(.secondary)
@@ -32,12 +27,12 @@ struct TaskDetailView: View {
                     
                     Spacer()
                     
-                    Text(task.status.rawValue)
+                    Text(task.isCompleted ? "Completed" : "Pending")
                         .font(.subheadline)
                         .foregroundColor(.white)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
-                        .background(statusColor(for: task.status))
+                        .background(task.isCompleted ? .green : .orange)
                         .cornerRadius(4)
                 }
                 .padding(.horizontal)
@@ -79,14 +74,6 @@ struct TaskDetailView: View {
                                 .fontWeight(.medium)
                                 .foregroundColor(.secondary)
                         }
-                        
-                        Button(action: {
-                            showingAssignSheet = true
-                        }) {
-                            Image(systemName: "pencil")
-                                .font(.caption)
-                                .foregroundColor(.blue)
-                        }
                     }
                     
                     if let group = taskViewModel.getGroup(for: task.groupID) {
@@ -106,52 +93,24 @@ struct TaskDetailView: View {
                         Text(task.createdAt.formatted(date: .abbreviated, time: .shortened))
                             .fontWeight(.medium)
                     }
-                    
-                    if task.createdAt != task.updatedAt {
-                        HStack {
-                            Label("Updated", systemImage: "arrow.triangle.2.circlepath")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(task.updatedAt.formatted(date: .abbreviated, time: .shortened))
-                                .fontWeight(.medium)
-                        }
-                    }
                 }
                 .padding(.horizontal)
                 
                 Divider()
                 
-                // Task status controls
-                VStack(alignment: .center, spacing: 12) {
-                    Text("Update Status")
-                        .font(.headline)
-                        .padding(.bottom, 4)
-                    
-                    HStack(spacing: 12) {
-                        ForEach(TaskStatus.allCases, id: \.self) { status in
-                            Button(action: {
-                                updateTaskStatus(status)
-                            }) {
-                                Text(status.rawValue)
-                                    .font(.caption)
-                                    .fontWeight(task.status == status ? .bold : .medium)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 8)
-                                    .frame(maxWidth: .infinity)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .fill(task.status == status ? 
-                                                  statusColor(for: status) : 
-                                                  statusColor(for: status).opacity(0.1))
-                                    )
-                                    .foregroundColor(task.status == status ? .white : statusColor(for: status))
-                            }
-                        }
-                    }
+                // Toggle completion button
+                Button(action: {
+                    taskViewModel.toggleTaskCompletion(task)
+                    task.isCompleted.toggle()
+                }) {
+                    Label(task.isCompleted ? "Mark as Pending" : "Mark as Complete",
+                          systemImage: task.isCompleted ? "circle" : "checkmark.circle.fill")
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(task.isCompleted ? Color.orange : Color.green)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
                 }
-                .padding()
-                .background(Color(.systemGray6))
-                .cornerRadius(12)
                 .padding(.horizontal)
                 
                 // Action buttons
@@ -182,11 +141,6 @@ struct TaskDetailView: View {
         .sheet(isPresented: $isEditing) {
             EditTaskView(task: $task)
         }
-        .sheet(isPresented: $showingAssignSheet) {
-            AssignTaskView(task: task) { updatedTask in
-                task = updatedTask
-            }
-        }
         .alert("Delete Task", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) {
@@ -198,28 +152,12 @@ struct TaskDetailView: View {
         }
     }
     
-    private func updateTaskStatus(_ status: TaskStatus) {
-        var updatedTask = task
-        updatedTask.status = status
-        updatedTask.updatedAt = Date()
-        
-        taskViewModel.updateTask(updatedTask)
-        task = updatedTask
-    }
-    
-    private func priorityColor(for priority: TaskPriority) -> Color {
+    private func priorityColor(for priority: Task.Priority) -> Color {
         switch priority {
         case .low: return .green
         case .medium: return .orange
         case .high: return .red
-        }
-    }
-    
-    private func statusColor(for status: TaskStatus) -> Color {
-        switch status {
-        case .todo: return .gray
-        case .inProgress: return .blue
-        case .completed: return .green
+        case .urgent: return .purple
         }
     }
 }
@@ -232,9 +170,7 @@ struct EditTaskView: View {
     @State private var title: String
     @State private var description: String
     @State private var dueDate: Date?
-    @State private var priority: TaskPriority
-    @State private var color: String
-    @State private var showDatePicker = false
+    @State private var priority: Task.Priority
     
     init(task: Binding<Task>) {
         self._task = task
@@ -242,7 +178,6 @@ struct EditTaskView: View {
         self._description = State(initialValue: task.wrappedValue.description)
         self._dueDate = State(initialValue: task.wrappedValue.dueDate)
         self._priority = State(initialValue: task.wrappedValue.priority)
-        self._color = State(initialValue: task.wrappedValue.color)
     }
     
     var body: some View {
@@ -283,34 +218,11 @@ struct EditTaskView: View {
                 
                 Section(header: Text("Priority")) {
                     Picker("Priority", selection: $priority) {
-                        ForEach(TaskPriority.allCases, id: \.self) { priority in
+                        ForEach(Task.Priority.allCases, id: \.self) { priority in
                             Text(priority.rawValue).tag(priority)
                         }
                     }
                     .pickerStyle(SegmentedPickerStyle())
-                }
-                
-                Section(header: Text("Color")) {
-                    LazyVGrid(columns: [
-                        GridItem(.flexible()),
-                        GridItem(.flexible()),
-                        GridItem(.flexible()),
-                        GridItem(.flexible()),
-                        GridItem(.flexible())
-                    ], spacing: 10) {
-                        ForEach(["FF5733", "33A8FF", "33FF57", "F333FF", "FFFC33", "FF33A2", "33FFF6", "8C33FF", "FF8C33", "33FF8C"], id: \.self) { colorHex in
-                            Circle()
-                                .fill(Color(hex: colorHex) ?? .blue)
-                                .frame(width: 30, height: 30)
-                                .overlay(
-                                    Circle()
-                                        .stroke(Color.primary, lineWidth: color == colorHex ? 2 : 0)
-                                )
-                                .onTapGesture {
-                                    color = colorHex
-                                }
-                        }
-                    }
                 }
             }
             .navigationTitle("Edit Task")
@@ -333,16 +245,12 @@ struct EditTaskView: View {
     }
     
     private func saveTask() {
-        var updatedTask = task
-        updatedTask.title = title
-        updatedTask.description = description
-        updatedTask.dueDate = dueDate
-        updatedTask.priority = priority
-        updatedTask.color = color
-        updatedTask.updatedAt = Date()
+        task.title = title
+        task.description = description
+        task.dueDate = dueDate
+        task.priority = priority
         
-        taskViewModel.updateTask(updatedTask)
-        task = updatedTask
+        taskViewModel.updateTask(task)
         presentationMode.wrappedValue.dismiss()
     }
 }
@@ -451,3 +359,5 @@ struct AssignTaskView: View {
         presentationMode.wrappedValue.dismiss()
     }
 }
+
+

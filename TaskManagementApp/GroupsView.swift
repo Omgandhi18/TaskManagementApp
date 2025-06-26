@@ -15,7 +15,9 @@ struct GroupsView: View {
         NavigationView {
             List {
                 ForEach(taskViewModel.groups) { group in
-                    GroupRowView(group: group)
+                    NavigationLink(destination: GroupDetailView(group: group)) {
+                        GroupRowView(group: group)
+                    }
                 }
                 .onDelete(perform: deleteGroups)
             }
@@ -41,4 +43,3 @@ struct GroupsView: View {
         }
     }
 }
-

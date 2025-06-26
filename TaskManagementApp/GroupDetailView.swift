@@ -91,7 +91,7 @@ struct GroupDetailView: View {
             }
         }
         .sheet(isPresented: $isAddingTask) {
-            AddTaskView(preselectedGroup: group)
+            AddTaskView()
         }
         .sheet(isPresented: $isShowingShareSheet) {
             if let inviteLink = taskViewModel.getGroupInviteLink(for: group) {

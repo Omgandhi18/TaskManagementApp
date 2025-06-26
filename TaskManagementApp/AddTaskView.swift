@@ -6,7 +6,7 @@
 //
 import SwiftUI
 
-// MARK: - Add Task View
+// MARK: - Fixed AddTaskView.swift
 struct AddTaskView: View {
     @Environment(\.presentationMode) var presentationMode
     @EnvironmentObject var taskViewModel: TaskViewModel
@@ -18,6 +18,12 @@ struct AddTaskView: View {
     @State private var dueDate = Date()
     @State private var hasDueDate = false
     @State private var selectedGroup: TaskGroup?
+    
+    let preselectedGroup: TaskGroup?
+    
+    init(preselectedGroup: TaskGroup? = nil) {
+        self.preselectedGroup = preselectedGroup
+    }
     
     var body: some View {
         NavigationView {
@@ -67,6 +73,11 @@ struct AddTaskView: View {
                         saveTask()
                     }
                     .disabled(title.isEmpty)
+                }
+            }
+            .onAppear {
+                if let preselectedGroup = preselectedGroup {
+                    selectedGroup = preselectedGroup
                 }
             }
         }

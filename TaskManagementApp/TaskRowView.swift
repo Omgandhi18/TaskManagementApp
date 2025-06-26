@@ -6,26 +6,40 @@
 //
 
 import SwiftUI
-// MARK: - Task Row View
+// MARK: - TaskRowView.swift
 struct TaskRowView: View {
     let task: Task
     @EnvironmentObject var taskViewModel: TaskViewModel
+    @State private var isCompleted: Bool
+    @State private var currentStatus: TaskStatus
+    
+    init(task: Task) {
+        self.task = task
+        self._isCompleted = State(initialValue: task.isCompleted)
+        self._currentStatus = State(initialValue: task.status)
+    }
     
     var body: some View {
         HStack {
             Button(action: {
+                // Update local state immediately for instant UI feedback
+                isCompleted.toggle()
+                currentStatus = isCompleted ? .completed : .todo
+                
+                // Then update the view model
                 taskViewModel.toggleTaskCompletion(task)
             }) {
-                Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle")
-                    .foregroundColor(task.isCompleted ? .green : .gray)
+                Image(systemName: isCompleted ? "checkmark.circle.fill" : "circle")
+                    .foregroundColor(isCompleted ? .green : .gray)
+                    .font(.title2)
             }
             .buttonStyle(PlainButtonStyle())
             
             VStack(alignment: .leading, spacing: 4) {
                 Text(task.title)
                     .font(.headline)
-                    .strikethrough(task.isCompleted)
-                    .foregroundColor(task.isCompleted ? .secondary : .primary)
+                    .strikethrough(isCompleted)
+                    .foregroundColor(isCompleted ? .secondary : .primary)
                 
                 if !task.description.isEmpty {
                     Text(task.description)
@@ -44,6 +58,15 @@ struct TaskRowView: View {
                         .foregroundColor(task.priority.color)
                         .cornerRadius(4)
                     
+                    // Status indicator
+                    Text(currentStatus.rawValue)
+                        .font(.caption)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(isCompleted ? Color.green.opacity(0.2) : Color.blue.opacity(0.2))
+                        .foregroundColor(isCompleted ? .green : .blue)
+                        .cornerRadius(4)
+                    
                     // Due date
                     if let dueDate = task.dueDate {
                         Text(dueDate, style: .date)
@@ -58,6 +81,14 @@ struct TaskRowView: View {
             Spacer()
         }
         .padding(.vertical, 2)
+        .opacity(isCompleted ? 0.7 : 1.0)
+        .animation(.easeInOut(duration: 0.2), value: isCompleted)
+        .onReceive(taskViewModel.$tasks) { tasks in
+            // Update local state when the task changes in the view model
+            if let updatedTask = tasks.first(where: { $0.id == task.id }) {
+                isCompleted = updatedTask.isCompleted
+                currentStatus = updatedTask.status
+            }
+        }
     }
 }
-
