@@ -3,11 +3,17 @@ import SwiftUI
 struct GroupDetailView: View {
     let group: TaskGroup
     @EnvironmentObject var taskViewModel: TaskViewModel
+    @EnvironmentObject var authViewModel: AuthenticationViewModel
     @State private var isAddingTask = false
-    @State private var isShowingShareSheet = false
+    @State private var showingInviteCode = false
+    @State private var copiedToClipboard = false
     
     var groupTasks: [Task] {
         taskViewModel.tasks.filter { $0.groupID == group.id }
+    }
+    
+    var isAdmin: Bool {
+        authViewModel.currentUser?.id == group.adminID
     }
     
     var body: some View {
@@ -33,6 +39,33 @@ struct GroupDetailView: View {
                 }
             }
             
+            // Invite Code Section (only show to admins)
+            if isAdmin {
+                Section(header: Text("Invite Code")) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Share this code with others to invite them:")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            
+                            Text(group.inviteCode)
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.primary)
+                                .textSelection(.enabled)
+                        }
+                        
+                        Spacer()
+                        
+                        Button(action: copyInviteCode) {
+                            Image(systemName: copiedToClipboard ? "checkmark" : "doc.on.doc")
+                                .foregroundColor(copiedToClipboard ? .green : .blue)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+            
             Section(header: Text("Members (\(group.members.count))")) {
                 ForEach(group.members) { member in
                     HStack {
@@ -40,8 +73,21 @@ struct GroupDetailView: View {
                             .foregroundColor(.blue)
                         
                         VStack(alignment: .leading) {
-                            Text(member.name)
-                                .font(.subheadline)
+                            HStack {
+                                Text(member.name)
+                                    .font(.subheadline)
+                                
+                                if member.id == group.adminID {
+                                    Text("Admin")
+                                        .font(.caption)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.blue.opacity(0.2))
+                                        .foregroundColor(.blue)
+                                        .clipShape(Capsule())
+                                }
+                            }
+                            
                             Text(member.email)
                                 .font(.caption)
                                 .foregroundColor(.secondary)
@@ -71,16 +117,9 @@ struct GroupDetailView: View {
                     }
                 }
             }
-            
-            Section {
-                Button(action: {
-                    isShowingShareSheet = true
-                }) {
-                    Label("Invite Members", systemImage: "person.badge.plus")
-                }
-            }
         }
         .navigationTitle("Group Details")
+        .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(action: {
@@ -93,10 +132,15 @@ struct GroupDetailView: View {
         .sheet(isPresented: $isAddingTask) {
             AddTaskView()
         }
-        .sheet(isPresented: $isShowingShareSheet) {
-            if let inviteLink = taskViewModel.getGroupInviteLink(for: group) {
-                ShareSheet(items: [inviteLink])
-            }
+    }
+    
+    private func copyInviteCode() {
+        UIPasteboard.general.string = group.inviteCode
+        copiedToClipboard = true
+        
+        // Reset the copied state after 2 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            copiedToClipboard = false
         }
     }
 }

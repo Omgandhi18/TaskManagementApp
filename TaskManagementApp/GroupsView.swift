@@ -10,6 +10,7 @@ import SwiftUI
 // MARK: - Groups View
 struct GroupsView: View {
     @EnvironmentObject var taskViewModel: TaskViewModel
+    @State private var showingJoinGroup = false
     
     var body: some View {
         NavigationView {
@@ -23,6 +24,17 @@ struct GroupsView: View {
             }
             .navigationTitle("Groups")
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: {
+                        showingJoinGroup = true
+                    }) {
+                        HStack {
+                            Image(systemName: "person.badge.plus")
+                            Text("Join")
+                        }
+                    }
+                }
+                
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: {
                         taskViewModel.showingAddGroup = true
@@ -33,6 +45,9 @@ struct GroupsView: View {
             }
             .sheet(isPresented: $taskViewModel.showingAddGroup) {
                 AddGroupView()
+            }
+            .sheet(isPresented: $showingJoinGroup) {
+                GroupInviteView()
             }
         }
     }

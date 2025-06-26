@@ -939,15 +939,21 @@ class TaskViewModel: ObservableObject {
                 }
             }
     }
+    // Updated joinGroupWithInviteCode method for TaskViewModel
     func joinGroupWithInviteCode(_ inviteCode: String, completion: @escaping (Result<TaskGroup, Error>) -> Void) {
-        guard let currentUser = AuthenticationViewModel().currentUser,
-              let userId = currentUser.id else {
+        // Get current user from AuthenticationViewModel
+        // Since we can't access it directly, we'll get the current user ID from UserDefaults or Firebase Auth
+        guard let currentUserData = UserDefaults.standard.data(forKey: "currentUser"),
+              let decodedUserStorage = try? JSONDecoder().decode(UserForStorage.self, from: currentUserData),
+              let userId = decodedUserStorage.id else {
             completion(.failure(NSError(domain: "", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])))
             return
         }
         
+        let currentUser = User(from: decodedUserStorage)
+        
         db.collection("groups")
-            .whereField("inviteCode", isEqualTo: inviteCode)
+            .whereField("inviteCode", isEqualTo: inviteCode.uppercased())
             .getDocuments { [weak self] snapshot, error in
                 if let error = error {
                     completion(.failure(error))
@@ -974,18 +980,34 @@ class TaskViewModel: ObservableObject {
                     
                     // Update Firestore
                     let groupRef = document.reference
-                    try groupRef.updateData([
+                    groupRef.updateData([
                         "memberIDs": FieldValue.arrayUnion([userId])
-                    ])
-                    
-                    // Update local groups array
-                    DispatchQueue.main.async {
-                        if let index = self?.groups.firstIndex(where: { $0.id == group.id }) {
-                            self?.groups[index] = group
-                        } else {
-                            self?.groups.append(group)
+                    ]) { updateError in
+                        if let updateError = updateError {
+                            completion(.failure(updateError))
+                            return
                         }
-                        completion(.success(group))
+                        
+                        // Update local groups array
+                        DispatchQueue.main.async {
+                            if let index = self?.groups.firstIndex(where: { $0.id == group.id }) {
+                                self?.groups[index] = group
+                            } else {
+                                self?.groups.append(group)
+                            }
+                            
+                            // Create a notification for group admin
+                            let notification = Notification(
+                                title: "New Member Joined",
+                                message: "\(currentUser.name) joined your group \"\(group.name)\"",
+                                type: .groupInvite,
+                                recipientID: group.adminID,
+                                senderID: userId
+                            )
+                            self?.createNotification(notification)
+                            
+                            completion(.success(group))
+                        }
                     }
                     
                 } catch {
