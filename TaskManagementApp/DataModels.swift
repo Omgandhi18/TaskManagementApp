@@ -269,15 +269,16 @@ struct TaskAnalytics: Codable {
 class AuthenticationViewModel: ObservableObject {
     @Published var isAuthenticated = false
     @Published var currentUser: User?
-    @Published var isLoading = true // Add loading state
+    @Published var isLoading = true // Add this line
     
     private let db = Firestore.firestore()
     
+    // Add this initializer
     init() {
         checkExistingAuthentication()
     }
     
-    // Check for existing authentication on app launch
+    // Add this method - Check for existing authentication on app launch
     private func checkExistingAuthentication() {
         // First check if we have stored user credentials
         if let storedUserID = UserDefaults.standard.string(forKey: "appleUserID"),
@@ -298,6 +299,7 @@ class AuthenticationViewModel: ObservableObject {
         }
     }
     
+    // Add this method
     private func verifyStoredUser(user: User, appleUserID: String) {
         guard let userID = user.id else {
             clearStoredCredentials()
@@ -343,6 +345,7 @@ class AuthenticationViewModel: ObservableObject {
         }
     }
     
+    // Add this method
     private func storeUserCredentials(user: User, appleUserID: String) {
         UserDefaults.standard.set(appleUserID, forKey: "appleUserID")
         
@@ -351,6 +354,7 @@ class AuthenticationViewModel: ObservableObject {
         }
     }
     
+    // Add this method
     private func clearStoredCredentials() {
         UserDefaults.standard.removeObject(forKey: "appleUserID")
         UserDefaults.standard.removeObject(forKey: "currentUser")
@@ -390,7 +394,7 @@ class AuthenticationViewModel: ObservableObject {
                             self?.isAuthenticated = true
                             self?.updateUserStatus(isOnline: true)
                             
-                            // Store credentials for auto-login
+                            // Store credentials for auto-login - ADD THIS LINE
                             self?.storeUserCredentials(user: user, appleUserID: appleUserID)
                         }
                     } catch {
@@ -425,7 +429,7 @@ class AuthenticationViewModel: ObservableObject {
                         self?.currentUser = userWithId
                         self?.isAuthenticated = true
                         
-                        // Store credentials for auto-login
+                        // Store credentials for auto-login - ADD THIS LINE
                         self?.storeUserCredentials(user: userWithId, appleUserID: appleUserID)
                         
                         // Set online status when user signs in
@@ -455,7 +459,7 @@ class AuthenticationViewModel: ObservableObject {
     
     func signOut() {
         updateUserStatus(isOnline: false)
-        clearStoredCredentials()
+        clearStoredCredentials() // CHANGE THIS LINE - was just clearing local variables
         currentUser = nil
         isAuthenticated = false
     }
