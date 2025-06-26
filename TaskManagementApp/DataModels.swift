@@ -266,77 +266,132 @@ struct TaskAnalytics: Codable {
 }
 
 // MARK: - View Models
+// Helper struct for storing User data in UserDefaults (without Firestore property wrappers)
+struct UserForStorage: Codable {
+    let id: String?
+    let name: String
+    let email: String
+    let appleUserID: String?
+    let profileImageURL: String?
+    let createdAt: Date
+    let isOnline: Bool
+    let lastSeen: Date
+}
+
+// Extension to convert between User and UserForStorage
+extension User {
+    init(from storage: UserForStorage) {
+        self.init(name: storage.name, email: storage.email, appleUserID: storage.appleUserID)
+        self.id = storage.id
+        self.profileImageURL = storage.profileImageURL
+        self.createdAt = storage.createdAt
+        self.isOnline = storage.isOnline
+        self.lastSeen = storage.lastSeen
+    }
+}
+
 class AuthenticationViewModel: ObservableObject {
     @Published var isAuthenticated = false
     @Published var currentUser: User?
-    @Published var isLoading = true // Add this line
+    @Published var isLoading = true
     
     private let db = Firestore.firestore()
     
-    // Add this initializer
     init() {
-        checkExistingAuthentication()
+        print("🚀 AuthenticationViewModel initialized")
+        // Add a small delay to ensure UI is ready
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            self.checkExistingAuthentication()
+        }
     }
     
-    // Add this method - Check for existing authentication on app launch
+    // Check for existing authentication on app launch
     private func checkExistingAuthentication() {
+        print("🔍 === STARTING AUTH CHECK ===")
+        print("🔍 Current thread: \(Thread.isMainThread ? "Main" : "Background")")
+        
+        // Debug UserDefaults contents
+        debugUserDefaults()
+        
         // First check if we have stored user credentials
         if let storedUserID = UserDefaults.standard.string(forKey: "appleUserID"),
            let storedUserData = UserDefaults.standard.data(forKey: "currentUser") {
             
+            print("📱 Found stored credentials:")
+            print("   - Apple User ID: \(storedUserID)")
+            print("   - Stored data size: \(storedUserData.count) bytes")
+            
             // Try to decode stored user
-            if let decodedUser = try? JSONDecoder().decode(User.self, from: storedUserData) {
+            do {
+                let decodedUserStorage = try JSONDecoder().decode(UserForStorage.self, from: storedUserData)
+                let decodedUser = User(from: decodedUserStorage)
+                print("✅ Successfully decoded stored user:")
+                print("   - Name: \(decodedUser.name)")
+                print("   - Email: \(decodedUser.email)")
+                print("   - ID: \(decodedUser.id ?? "nil")")
+                
                 // Verify the user still exists in Firestore and update their data
                 verifyStoredUser(user: decodedUser, appleUserID: storedUserID)
-            } else {
+            } catch {
+                print("❌ Error decoding stored user: \(error)")
+                print("❌ Will clear corrupted data and show login")
                 // Clear corrupted data and show login
                 clearStoredCredentials()
-                isLoading = false
+                DispatchQueue.main.async {
+                    self.isLoading = false
+                }
             }
         } else {
-            // No stored credentials, show login
-            isLoading = false
+            print("📝 No stored credentials found:")
+            print("   - Apple User ID: \(UserDefaults.standard.string(forKey: "appleUserID") ?? "nil")")
+            print("   - User Data: \(UserDefaults.standard.data(forKey: "currentUser") != nil ? "exists" : "nil")")
+            
+            // Check if we have appleUserID but no user data (corrupted state)
+            if let storedAppleID = UserDefaults.standard.string(forKey: "appleUserID") {
+                print("🔧 Found orphaned Apple ID, attempting to recover user...")
+                recoverUserFromAppleID(appleUserID: storedAppleID)
+            } else {
+                print("📝 Showing login screen")
+                // No stored credentials, show login
+                DispatchQueue.main.async {
+                    self.isLoading = false
+                }
+            }
         }
     }
     
-    // Add this method
-    private func verifyStoredUser(user: User, appleUserID: String) {
-        guard let userID = user.id else {
-            clearStoredCredentials()
-            isLoading = false
-            return
-        }
+    private func recoverUserFromAppleID(appleUserID: String) {
+        print("🔄 Attempting to recover user from Apple ID: \(appleUserID)")
         
-        // Check if user still exists in Firestore
-        db.collection("users").document(userID).getDocument { [weak self] document, error in
+        db.collection("users").whereField("appleUserID", isEqualTo: appleUserID).getDocuments { [weak self] snapshot, error in
             DispatchQueue.main.async {
                 if let error = error {
-                    print("Error verifying user: \(error)")
+                    print("❌ Error recovering user: \(error)")
                     self?.clearStoredCredentials()
                     self?.isLoading = false
                     return
                 }
                 
-                if let document = document, document.exists {
-                    // User exists, update with latest data from Firestore
+                if let documents = snapshot?.documents, !documents.isEmpty,
+                   let userData = documents.first {
                     do {
-                        let updatedUser = try document.data(as: User.self)
-                        self?.currentUser = updatedUser
-                        self?.isAuthenticated = true
-                        self?.updateUserStatus(isOnline: true)
+                        let user = try userData.data(as: User.self)
+                        print("✅ User recovered successfully: \(user.name)")
                         
-                        // Update stored user data
-                        self?.storeUserCredentials(user: updatedUser, appleUserID: appleUserID)
-                    } catch {
-                        print("Error decoding updated user: \(error)")
-                        // Use stored user data as fallback
                         self?.currentUser = user
                         self?.isAuthenticated = true
                         self?.updateUserStatus(isOnline: true)
+                        
+                        // Store the recovered user data
+                        self?.storeUserCredentials(user: user, appleUserID: appleUserID)
+                        
+                        print("🎉 AUTO-LOGIN SUCCESSFUL (recovered)!")
+                    } catch {
+                        print("❌ Error decoding recovered user: \(error)")
+                        self?.clearStoredCredentials()
                     }
                 } else {
-                    // User no longer exists in Firestore
-                    print("User no longer exists in Firestore")
+                    print("❌ No user found for Apple ID, clearing credentials")
                     self?.clearStoredCredentials()
                 }
                 
@@ -345,22 +400,141 @@ class AuthenticationViewModel: ObservableObject {
         }
     }
     
-    // Add this method
-    private func storeUserCredentials(user: User, appleUserID: String) {
-        UserDefaults.standard.set(appleUserID, forKey: "appleUserID")
+    private func debugUserDefaults() {
+        print("🔧 === USERDEFAULTS DEBUG ===")
+        let allKeys = UserDefaults.standard.dictionaryRepresentation().keys
+        print("🔧 All UserDefaults keys: \(allKeys)")
         
-        if let encodedUser = try? JSONEncoder().encode(user) {
-            UserDefaults.standard.set(encodedUser, forKey: "currentUser")
+        // Check our specific keys
+        if let appleID = UserDefaults.standard.string(forKey: "appleUserID") {
+            print("🔧 appleUserID exists: \(appleID)")
+        } else {
+            print("🔧 appleUserID: NOT FOUND")
+        }
+        
+        if let userData = UserDefaults.standard.data(forKey: "currentUser") {
+            print("🔧 currentUser data exists: \(userData.count) bytes")
+        } else {
+            print("🔧 currentUser data: NOT FOUND")
+        }
+        print("🔧 === END USERDEFAULTS DEBUG ===")
+    }
+    
+    private func verifyStoredUser(user: User, appleUserID: String) {
+        guard let userID = user.id else {
+            print("❌ User has no ID, clearing credentials")
+            clearStoredCredentials()
+            DispatchQueue.main.async {
+                self.isLoading = false
+            }
+            return
+        }
+        
+        print("🔄 Verifying user exists in Firestore: \(userID)")
+        
+        // Check if user still exists in Firestore
+        db.collection("users").document(userID).getDocument { [weak self] document, error in
+            print("🔄 Firestore response received")
+            
+            DispatchQueue.main.async {
+                if let error = error {
+                    print("❌ Error verifying user in Firestore: \(error)")
+                    self?.clearStoredCredentials()
+                    self?.isLoading = false
+                    return
+                }
+                
+                if let document = document, document.exists {
+                    print("✅ User verified in Firestore")
+                    // User exists, update with latest data from Firestore
+                    do {
+                        let updatedUser = try document.data(as: User.self)
+                        print("🎉 AUTO-LOGIN SUCCESSFUL!")
+                        print("   - User: \(updatedUser.name)")
+                        print("   - Setting isAuthenticated = true")
+                        
+                        self?.currentUser = updatedUser
+                        self?.isAuthenticated = true
+                        self?.updateUserStatus(isOnline: true)
+                        
+                        // Update stored user data
+                        self?.storeUserCredentials(user: updatedUser, appleUserID: appleUserID)
+                        
+                        print("✅ Auth state updated - isAuthenticated: \(self?.isAuthenticated ?? false)")
+                    } catch {
+                        print("⚠️ Error decoding updated user from Firestore: \(error)")
+                        // Use stored user data as fallback
+                        print("🔄 Using stored user data as fallback")
+                        self?.currentUser = user
+                        self?.isAuthenticated = true
+                        self?.updateUserStatus(isOnline: true)
+                        print("✅ Auth state updated (fallback) - isAuthenticated: \(self?.isAuthenticated ?? false)")
+                    }
+                } else {
+                    // User no longer exists in Firestore
+                    print("❌ User no longer exists in Firestore")
+                    self?.clearStoredCredentials()
+                }
+                
+                print("🏁 Setting isLoading = false")
+                self?.isLoading = false
+                print("🏁 Final state - isAuthenticated: \(self?.isAuthenticated ?? false), isLoading: \(self?.isLoading ?? true)")
+            }
         }
     }
     
-    // Add this method
+    private func storeUserCredentials(user: User, appleUserID: String) {
+        print("💾 === STORING USER CREDENTIALS ===")
+        print("💾 User: \(user.name)")
+        print("💾 Apple ID: \(appleUserID)")
+        
+        UserDefaults.standard.set(appleUserID, forKey: "appleUserID")
+        print("💾 ✅ Apple ID stored")
+        
+        // Create a JSON-encodable version of the user (without @DocumentID property wrapper)
+        let userForStorage = UserForStorage(
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            appleUserID: user.appleUserID,
+            profileImageURL: user.profileImageURL,
+            createdAt: user.createdAt,
+            isOnline: user.isOnline,
+            lastSeen: user.lastSeen
+        )
+        
+        do {
+            let encodedUser = try JSONEncoder().encode(userForStorage)
+            UserDefaults.standard.set(encodedUser, forKey: "currentUser")
+            print("💾 ✅ User data encoded and stored (\(encodedUser.count) bytes)")
+            
+            // Force synchronize
+            UserDefaults.standard.synchronize()
+            print("💾 ✅ UserDefaults synchronized")
+            
+            // Verify storage immediately
+            let storedAppleID = UserDefaults.standard.string(forKey: "appleUserID")
+            let storedUserData = UserDefaults.standard.data(forKey: "currentUser")
+            print("💾 Verification - Apple ID: \(storedAppleID ?? "nil")")
+            print("💾 Verification - User data: \(storedUserData?.count ?? 0) bytes")
+            
+        } catch {
+            print("❌ Error encoding user for storage: \(error)")
+        }
+        print("💾 === END STORING CREDENTIALS ===")
+    }
+    
     private func clearStoredCredentials() {
+        print("🗑️ === CLEARING STORED CREDENTIALS ===")
         UserDefaults.standard.removeObject(forKey: "appleUserID")
         UserDefaults.standard.removeObject(forKey: "currentUser")
+        UserDefaults.standard.synchronize()
+        print("🗑️ ✅ Credentials cleared and synchronized")
     }
     
     func signInWithApple(result: Result<ASAuthorization, Error>) {
+        print("🍎 === APPLE SIGN IN STARTED ===")
+        
         switch result {
         case .success(let authorization):
             if let appleIDCredential = authorization.credential as? ASAuthorizationAppleIDCredential {
@@ -369,22 +543,30 @@ class AuthenticationViewModel: ObservableObject {
                 let fullName = appleIDCredential.fullName
                 let name = "\(fullName?.givenName ?? "") \(fullName?.familyName ?? "")".trimmingCharacters(in: .whitespaces)
                 
+                print("🍎 Apple Sign In Success:")
+                print("   - Apple ID: \(userID)")
+                print("   - Email: \(email)")
+                print("   - Name: \(name)")
+                
                 // Check if user exists in Firestore
                 checkUserExists(appleUserID: userID, name: name.isEmpty ? "Apple User" : name, email: email)
             }
         case .failure(let error):
-            print("Apple Sign In failed: \(error.localizedDescription)")
+            print("❌ Apple Sign In failed: \(error.localizedDescription)")
         }
     }
     
     private func checkUserExists(appleUserID: String, name: String, email: String) {
+        print("🔍 Checking if user exists in Firestore...")
+        
         db.collection("users").whereField("appleUserID", isEqualTo: appleUserID).getDocuments { [weak self] snapshot, error in
             if let error = error {
-                print("Error checking user: \(error)")
+                print("❌ Error checking user: \(error)")
                 return
             }
             
             if let documents = snapshot?.documents, !documents.isEmpty {
+                print("👤 Existing user found")
                 // User exists, load their data
                 if let userData = documents.first {
                     do {
@@ -394,14 +576,16 @@ class AuthenticationViewModel: ObservableObject {
                             self?.isAuthenticated = true
                             self?.updateUserStatus(isOnline: true)
                             
-                            // Store credentials for auto-login - ADD THIS LINE
+                            // Store credentials for auto-login
                             self?.storeUserCredentials(user: user, appleUserID: appleUserID)
+                            print("✅ Existing user signed in: \(user.name)")
                         }
                     } catch {
-                        print("Error decoding user: \(error)")
+                        print("❌ Error decoding user: \(error)")
                     }
                 }
             } else {
+                print("🆕 New user, creating account...")
                 // New user, create account
                 self?.createNewUser(appleUserID: appleUserID, name: name, email: email)
             }
@@ -409,27 +593,29 @@ class AuthenticationViewModel: ObservableObject {
     }
     
     private func createNewUser(appleUserID: String, name: String, email: String) {
+        print("🆕 Creating new user: \(name)")
         let newUser = User(name: name, email: email, appleUserID: appleUserID)
         
         do {
             // Create a new document with auto ID
             let newDocRef = db.collection("users").document()
-            var userData = try Firestore.Encoder().encode(newUser)
             
-            // Update the user with the document ID
+            // Create user data for Firestore (using Firestore.Encoder)
             var userWithId = newUser
             userWithId.id = newDocRef.documentID
-            userData = try Firestore.Encoder().encode(userWithId)
+            let firestoreUserData = try Firestore.Encoder().encode(userWithId)
             
-            newDocRef.setData(userData) { [weak self] error in
+            newDocRef.setData(firestoreUserData) { [weak self] error in
                 if let error = error {
-                    print("Error creating user: \(error)")
+                    print("❌ Error creating user: \(error)")
                 } else {
+                    print("✅ New user created successfully: \(name)")
                     DispatchQueue.main.async {
                         self?.currentUser = userWithId
                         self?.isAuthenticated = true
                         
-                        // Store credentials for auto-login - ADD THIS LINE
+                        // Store credentials for auto-login
+                        // This will handle the encoding issue properly
                         self?.storeUserCredentials(user: userWithId, appleUserID: appleUserID)
                         
                         // Set online status when user signs in
@@ -438,7 +624,7 @@ class AuthenticationViewModel: ObservableObject {
                 }
             }
         } catch {
-            print("Error encoding user: \(error)")
+            print("❌ Error encoding user for Firestore: \(error)")
         }
     }
     
@@ -452,16 +638,41 @@ class AuthenticationViewModel: ObservableObject {
         
         db.collection("users").document(userId).updateData(updates) { error in
             if let error = error {
-                print("Error updating user status: \(error)")
+                print("❌ Error updating user status: \(error)")
+            } else {
+                print("✅ User status updated: \(isOnline ? "online" : "offline")")
             }
         }
     }
     
     func signOut() {
+        print("👋 === SIGNING OUT ===")
         updateUserStatus(isOnline: false)
-        clearStoredCredentials() // CHANGE THIS LINE - was just clearing local variables
+        clearStoredCredentials()
         currentUser = nil
         isAuthenticated = false
+        print("✅ User signed out successfully")
+    }
+    
+    // Manual debug method - call this from your UI to see current state
+    func debugCurrentState() {
+        print("=== 🔧 CURRENT AUTH STATE ===")
+        print("isAuthenticated: \(isAuthenticated)")
+        print("isLoading: \(isLoading)")
+        print("currentUser: \(currentUser?.name ?? "nil")")
+        print("Thread: \(Thread.isMainThread ? "Main" : "Background")")
+        debugUserDefaults()
+        print("=== 🔧 END AUTH STATE ===")
+    }
+    
+    // Force clear everything for testing
+    func resetForTesting() {
+        print("🧪 === RESETTING FOR TESTING ===")
+        clearStoredCredentials()
+        currentUser = nil
+        isAuthenticated = false
+        isLoading = false
+        print("🧪 Reset complete")
     }
 }
 
