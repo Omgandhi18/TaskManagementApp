@@ -87,10 +87,6 @@ struct GroupDetailView: View {
                                         .clipShape(Capsule())
                                 }
                             }
-                            
-                            Text(member.email)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
                         }
                         
                         Spacer()

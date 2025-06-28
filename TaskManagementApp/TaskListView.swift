@@ -70,7 +70,9 @@ struct TaskListView: View {
                         taskViewModel.startListening(for: userId)
                     }
                 }
+                .scrollContentBackground(.hidden)
             }
+            .background(.appBackground)
             .navigationTitle("My Tasks (\(filteredTasks.count))")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {

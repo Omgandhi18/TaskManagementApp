@@ -36,9 +36,13 @@ struct LoadingView: View {
     @State private var isAnimating = false
     
     var body: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 60))
+        ZStack{
+            Color(.reverseAccent)
+                .ignoresSafeArea()
+            Image("Logo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 140, height: 140)
                 .foregroundColor(.blue)
                 .scaleEffect(isAnimating ? 1.1 : 1.0)
                 .animation(
@@ -46,14 +50,6 @@ struct LoadingView: View {
                         .repeatForever(autoreverses: true),
                     value: isAnimating
                 )
-            
-            Text("TaskManager")
-                .font(.title)
-                .fontWeight(.semibold)
-            
-            ProgressView()
-                .scaleEffect(1.2)
-                .padding(.top, 10)
         }
         .onAppear {
             isAnimating = true
