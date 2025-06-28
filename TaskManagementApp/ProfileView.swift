@@ -70,7 +70,7 @@ struct ProfileView: View {
                     }
                 }
                 .padding()
-                .background(Color(.systemGray6))
+                .background(.white)
                 .cornerRadius(12)
                 .padding(.horizontal)
                 
@@ -81,15 +81,16 @@ struct ProfileView: View {
                     authViewModel.signOut()
                 }) {
                     Text("Sign Out")
-                        .foregroundColor(.red)
+                        .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
                         .padding()
-                        .background(Color(.systemGray6))
+                        .background(.red)
                         .cornerRadius(10)
                 }
                 .padding(.horizontal)
                 .padding(.bottom, 50)
             }
+            .background(.appBackground)
             .navigationTitle("Profile")
         }
     }

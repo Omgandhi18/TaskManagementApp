@@ -14,14 +14,19 @@ struct GroupsView: View {
     
     var body: some View {
         NavigationView {
-            List {
-                ForEach(taskViewModel.groups) { group in
-                    NavigationLink(destination: GroupDetailView(group: group)) {
-                        GroupRowView(group: group)
+            VStack{
+                List {
+                    ForEach(taskViewModel.groups) { group in
+                        NavigationLink(destination: GroupDetailView(group: group)) {
+                            GroupRowView(group: group)
+                        }
                     }
+                    .onDelete(perform: deleteGroups)
                 }
-                .onDelete(perform: deleteGroups)
+                .scrollContentBackground(.hidden)
+
             }
+            .background(.appBackground)
             .navigationTitle("Groups")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {

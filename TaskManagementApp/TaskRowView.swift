@@ -20,66 +20,74 @@ struct TaskRowView: View {
     }
     
     var body: some View {
-        HStack {
-            Button(action: {
-                // Update local state immediately for instant UI feedback
-                isCompleted.toggle()
-                currentStatus = isCompleted ? .completed : .todo
-                
-                // Then update the view model
-                taskViewModel.toggleTaskCompletion(task)
-            }) {
-                Image(systemName: isCompleted ? "checkmark.circle.fill" : "circle")
-                    .foregroundColor(isCompleted ? .green : .gray)
-                    .font(.title2)
-            }
-            .buttonStyle(PlainButtonStyle())
-            
-            VStack(alignment: .leading, spacing: 4) {
-                Text(task.title)
-                    .font(.headline)
-                    .strikethrough(isCompleted)
-                    .foregroundColor(isCompleted ? .secondary : .primary)
-                
-                if !task.description.isEmpty {
-                    Text(task.description)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
+        NavigationLink(destination: TaskDetailView(task: task)) {
+            HStack {
+                Button(action: {
+                    // Update local state immediately for instant UI feedback
+                    isCompleted.toggle()
+                    currentStatus = isCompleted ? .completed : .todo
+                    
+                    // Then update the view model
+                    taskViewModel.toggleTaskCompletion(task)
+                }) {
+                    Image(systemName: isCompleted ? "checkmark.circle.fill" : "circle")
+                        .foregroundColor(isCompleted ? .green : .gray)
+                        .font(.title2)
                 }
+                .buttonStyle(PlainButtonStyle())
                 
-                HStack {
-                    // Priority indicator
-                    Text(task.priority.rawValue)
-                        .font(.caption)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(task.priority.color.opacity(0.2))
-                        .foregroundColor(task.priority.color)
-                        .cornerRadius(4)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(task.title)
+                        .font(.headline)
+                        .strikethrough(isCompleted)
+                        .foregroundColor(isCompleted ? .secondary : .primary)
                     
-                    // Status indicator
-                    Text(currentStatus.rawValue)
-                        .font(.caption)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(isCompleted ? Color.green.opacity(0.2) : Color.blue.opacity(0.2))
-                        .foregroundColor(isCompleted ? .green : .blue)
-                        .cornerRadius(4)
-                    
-                    // Due date
-                    if let dueDate = task.dueDate {
-                        Text(dueDate, style: .date)
+                    if !task.description.isEmpty {
+                        Text(task.description)
                             .font(.caption)
                             .foregroundColor(.secondary)
+                            .lineLimit(2)
                     }
                     
-                    Spacer()
+                    HStack {
+                        // Priority indicator
+                        Text(task.priority.rawValue)
+                            .font(.caption)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(task.priority.color.opacity(0.2))
+                            .foregroundColor(task.priority.color)
+                            .cornerRadius(4)
+                        
+                        // Status indicator
+                        Text(currentStatus.rawValue)
+                            .font(.caption)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(isCompleted ? Color.green.opacity(0.2) : Color.blue.opacity(0.2))
+                            .foregroundColor(isCompleted ? .green : .blue)
+                            .cornerRadius(4)
+                        
+                        // Due date
+                        if let dueDate = task.dueDate {
+                            Text(dueDate, style: .date)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Spacer()
+                    }
                 }
+                
+                Spacer()
+                
+                // Navigation chevron
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
-            
-            Spacer()
         }
+        .buttonStyle(PlainButtonStyle()) // Prevents NavigationLink from affecting button styling
         .padding(.vertical, 2)
         .opacity(isCompleted ? 0.7 : 1.0)
         .animation(.easeInOut(duration: 0.2), value: isCompleted)

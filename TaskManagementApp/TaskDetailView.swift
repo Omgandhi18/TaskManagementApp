@@ -1,229 +1,377 @@
 import SwiftUI
 import FirebaseFirestore
 
+import SwiftUI
+
 struct TaskDetailView: View {
+    let task: Task
     @EnvironmentObject var taskViewModel: TaskViewModel
+    @EnvironmentObject var authViewModel: AuthenticationViewModel
     @Environment(\.presentationMode) var presentationMode
-    @State private var task: Task
-    @State private var isEditing = false
-    @State private var showingDeleteConfirmation = false
     
-    init(task: Task) {
-        _task = State(initialValue: task)
+    @State private var showingReassignSheet = false
+    @State private var showingEditSheet = false
+    @State private var showingDeleteAlert = false
+    
+    var assigneeName: String {
+        if let currentUser = authViewModel.currentUser,
+           task.assignedTo == currentUser.id {
+            return "You"
+        }
+        return taskViewModel.getUserName(for: task.assignedTo) ?? "Unknown User"
+    }
+    
+    var group: TaskGroup? {
+        taskViewModel.getGroup(for: task.groupID)
+    }
+    
+    var isGroupTask: Bool {
+        task.groupID != nil
+    }
+    
+    var canReassign: Bool {
+        guard let group = group,
+              let currentUser = authViewModel.currentUser else { return false }
+        
+        // Allow reassignment if user is admin or the task creator
+        return group.adminID == currentUser.id || task.createdBy == currentUser.id
+    }
+    
+    var isAssignedToCurrentUser: Bool {
+        task.assignedTo == authViewModel.currentUser?.id
     }
     
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                // Task header
-                HStack {
-                    Text(task.priority.rawValue)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(priorityColor(for: task.priority).opacity(0.1))
-                        .cornerRadius(4)
-                    
-                    Spacer()
-                    
-                    Text(task.isCompleted ? "Completed" : "Pending")
-                        .font(.subheadline)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(task.isCompleted ? .green : .orange)
-                        .cornerRadius(4)
-                }
-                .padding(.horizontal)
-                
-                // Task title and description
+                // Task Status Section
                 VStack(alignment: .leading, spacing: 12) {
-                    Text(task.title)
-                        .font(.title)
-                        .fontWeight(.bold)
-                    
-                    Text(task.description)
-                        .font(.body)
-                        .foregroundColor(.secondary)
-                }
-                .padding(.horizontal)
-                
-                Divider()
-                
-                // Task metadata
-                VStack(alignment: .leading, spacing: 16) {
                     HStack {
-                        Label("Due Date", systemImage: "calendar")
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Text(task.dueDate?.formatted(date: .long, time: .shortened) ?? "No due date")
-                            .fontWeight(.medium)
-                    }
-                    
-                    HStack {
-                        Label("Assigned To", systemImage: "person")
-                            .foregroundColor(.secondary)
-                        Spacer()
+                        Button(action: {
+                            taskViewModel.toggleTaskCompletion(task)
+                        }) {
+                            Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle")
+                                .foregroundColor(task.isCompleted ? .green : .gray)
+                                .font(.title)
+                        }
+                        .buttonStyle(PlainButtonStyle())
                         
-                        if let assignedToName = taskViewModel.getUserName(for: task.assignedTo) {
-                            Text(assignedToName)
-                                .fontWeight(.medium)
-                        } else {
-                            Text("Unassigned")
-                                .fontWeight(.medium)
-                                .foregroundColor(.secondary)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(task.title)
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .strikethrough(task.isCompleted)
+                            
+                            Text(task.status.rawValue)
+                                .font(.subheadline)
+                                .foregroundColor(task.isCompleted ? .green : .orange)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(
+                                    (task.isCompleted ? Color.green : Color.orange)
+                                        .opacity(0.2)
+                                )
+                                .cornerRadius(8)
                         }
-                    }
-                    
-                    if let group = taskViewModel.getGroup(for: task.groupID) {
-                        HStack {
-                            Label("Group", systemImage: "folder")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(group.name)
-                                .fontWeight(.medium)
-                        }
-                    }
-                    
-                    HStack {
-                        Label("Created", systemImage: "clock")
-                            .foregroundColor(.secondary)
+                        
                         Spacer()
-                        Text(task.createdAt.formatted(date: .abbreviated, time: .shortened))
-                            .fontWeight(.medium)
-                    }
-                }
-                .padding(.horizontal)
-                
-                Divider()
-                
-                // Toggle completion button
-                Button(action: {
-                    taskViewModel.toggleTaskCompletion(task)
-                    task.isCompleted.toggle()
-                }) {
-                    Label(task.isCompleted ? "Mark as Pending" : "Mark as Complete",
-                          systemImage: task.isCompleted ? "circle" : "checkmark.circle.fill")
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(task.isCompleted ? Color.orange : Color.green)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
-                }
-                .padding(.horizontal)
-                
-                // Action buttons
-                VStack(spacing: 12) {
-                    Button(action: { isEditing = true }) {
-                        Label("Edit Task", systemImage: "pencil")
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.blue)
-                            .foregroundColor(.white)
-                            .cornerRadius(10)
-                    }
-                    
-                    Button(action: { showingDeleteConfirmation = true }) {
-                        Label("Delete Task", systemImage: "trash")
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.red)
-                            .foregroundColor(.white)
-                            .cornerRadius(10)
                     }
                 }
                 .padding()
+                .background(Color(.systemGray6))
+                .cornerRadius(12)
+                
+                // Task Details Section
+                VStack(alignment: .leading, spacing: 16) {
+                    if !task.description.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Description")
+                                .font(.headline)
+                            Text(task.description)
+                                .font(.body)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    
+                    // Priority
+                    HStack {
+                        Text("Priority")
+                            .font(.headline)
+                        Spacer()
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(task.priority.color)
+                                .frame(width: 12, height: 12)
+                            Text(task.priority.rawValue)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                        }
+                    }
+                    
+                    // Due Date
+                    if let dueDate = task.dueDate {
+                        HStack {
+                            Text("Due Date")
+                                .font(.headline)
+                            Spacer()
+                            Text(dueDate.formatted(date: .abbreviated, time: .shortened))
+                                .font(.subheadline)
+                                .foregroundColor(dueDate < Date() ? .red : .primary)
+                        }
+                    }
+                    
+                    // Assignment Info
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Assignment")
+                            .font(.headline)
+                        
+                        HStack {
+                            Image(systemName: "person.circle.fill")
+                                .foregroundColor(isAssignedToCurrentUser ? .blue : .orange)
+                                .font(.title2)
+                            
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Assigned to: \(assigneeName)")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                
+                                if let group = group {
+                                    Text("in \(group.name)")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            
+                            Spacer()
+                            
+                            // Reassign button for group tasks
+                            if isGroupTask && canReassign {
+                                Button("Reassign") {
+                                    showingReassignSheet = true
+                                }
+                                .font(.subheadline)
+                                .foregroundColor(.blue)
+                            }
+                        }
+                        .padding()
+                        .background(Color(.systemGray6))
+                        .cornerRadius(8)
+                    }
+                    
+                    // Created info
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Created")
+                            .font(.headline)
+                        
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("By: \(taskViewModel.getUserName(for: task.createdBy) ?? "Unknown")")
+                                    .font(.subheadline)
+                                Text("On: \(task.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                        }
+                        .padding()
+                        .background(Color(.systemGray6))
+                        .cornerRadius(8)
+                    }
+                }
+                .padding()
+                .background(Color(.systemBackground))
+                .cornerRadius(12)
+                
+                Spacer()
             }
+            .padding()
         }
         .navigationTitle("Task Details")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $isEditing) {
-            EditTaskView(task: $task)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Menu {
+                    Button(action: {
+                        showingEditSheet = true
+                    }) {
+                        Label("Edit Task", systemImage: "pencil")
+                    }
+                    
+                    if isGroupTask && canReassign {
+                        Button(action: {
+                            showingReassignSheet = true
+                        }) {
+                            Label("Reassign Task", systemImage: "person.2")
+                        }
+                    }
+                    
+                    Divider()
+                    
+                    Button(role: .destructive, action: {
+                        showingDeleteAlert = true
+                    }) {
+                        Label("Delete Task", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+            }
         }
-        .alert("Delete Task", isPresented: $showingDeleteConfirmation) {
-            Button("Cancel", role: .cancel) { }
+        .sheet(isPresented: $showingReassignSheet) {
+            ReassignTaskView(task: task)
+        }
+        .sheet(isPresented: $showingEditSheet) {
+            EditTaskView(task: task)
+        }
+        .alert("Delete Task", isPresented: $showingDeleteAlert) {
             Button("Delete", role: .destructive) {
                 taskViewModel.deleteTask(task)
                 presentationMode.wrappedValue.dismiss()
             }
+            Button("Cancel", role: .cancel) { }
         } message: {
             Text("Are you sure you want to delete this task? This action cannot be undone.")
         }
     }
-    
-    private func priorityColor(for priority: Task.Priority) -> Color {
-        switch priority {
-        case .low: return .green
-        case .medium: return .orange
-        case .high: return .red
-        case .urgent: return .purple
-        }
-    }
 }
 
-struct EditTaskView: View {
-    @Environment(\.presentationMode) var presentationMode
+// MARK: - Reassign Task View
+struct ReassignTaskView: View {
+    let task: Task
     @EnvironmentObject var taskViewModel: TaskViewModel
-    @Binding var task: Task
+    @EnvironmentObject var authViewModel: AuthenticationViewModel
+    @Environment(\.presentationMode) var presentationMode
     
-    @State private var title: String
-    @State private var description: String
-    @State private var dueDate: Date?
-    @State private var priority: Task.Priority
+    @State private var selectedAssignee: User?
     
-    init(task: Binding<Task>) {
-        self._task = task
-        self._title = State(initialValue: task.wrappedValue.title)
-        self._description = State(initialValue: task.wrappedValue.description)
-        self._dueDate = State(initialValue: task.wrappedValue.dueDate)
-        self._priority = State(initialValue: task.wrappedValue.priority)
+    var group: TaskGroup? {
+        taskViewModel.getGroup(for: task.groupID)
+    }
+    
+    var availableAssignees: [User] {
+        group?.members ?? []
+    }
+    
+    var currentAssignee: User? {
+        availableAssignees.first { $0.id == task.assignedTo }
     }
     
     var body: some View {
         NavigationView {
-            Form {
-                Section(header: Text("Task Details")) {
-                    TextField("Title", text: $title)
-                    
-                    ZStack(alignment: .topLeading) {
-                        if description.isEmpty {
-                            Text("Description")
-                                .foregroundColor(.gray)
-                                .padding(.top, 8)
-                                .padding(.leading, 4)
+            List {
+                Section(header: Text("Current Assignment")) {
+                    if let current = currentAssignee {
+                        HStack {
+                            Image(systemName: "person.circle.fill")
+                                .foregroundColor(.blue)
+                            VStack(alignment: .leading) {
+                                Text(current.name)
+                                    .font(.subheadline)
+                                Text(current.email)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            if current.isOnline {
+                                Circle()
+                                    .fill(Color.green)
+                                    .frame(width: 8, height: 8)
+                            }
                         }
-                        TextEditor(text: $description)
-                            .frame(minHeight: 100)
                     }
                 }
                 
-                Section(header: Text("Due Date")) {
-                    Toggle("Set Due Date", isOn: Binding(
-                        get: { dueDate != nil },
-                        set: { if !$0 { dueDate = nil } else if dueDate == nil { dueDate = Date() } }
-                    ))
-                    
-                    if dueDate != nil {
-                        DatePicker(
-                            "Due Date",
-                            selection: Binding(
-                                get: { dueDate ?? Date() },
-                                set: { dueDate = $0 }
-                            ),
-                            displayedComponents: [.date, .hourAndMinute]
-                        )
+                Section(header: Text("Reassign to")) {
+                    ForEach(availableAssignees) { member in
+                        Button(action: {
+                            selectedAssignee = member
+                        }) {
+                            HStack {
+                                Image(systemName: selectedAssignee?.id == member.id ? "checkmark.circle.fill" : "person.circle")
+                                    .foregroundColor(selectedAssignee?.id == member.id ? .green : .blue)
+                                
+                                VStack(alignment: .leading) {
+                                    Text(member.name)
+                                        .font(.subheadline)
+                                        .foregroundColor(.primary)
+                                    Text(member.email)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                
+                                Spacer()
+                                
+                                if member.isOnline {
+                                    Circle()
+                                        .fill(Color.green)
+                                        .frame(width: 8, height: 8)
+                                }
+                            }
+                        }
+                        .disabled(member.id == task.assignedTo)
+                        .opacity(member.id == task.assignedTo ? 0.5 : 1.0)
+                    }
+                }
+            }
+            .navigationTitle("Reassign Task")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        presentationMode.wrappedValue.dismiss()
                     }
                 }
                 
-                Section(header: Text("Priority")) {
-                    Picker("Priority", selection: $priority) {
-                        ForEach(Task.Priority.allCases, id: \.self) { priority in
-                            Text(priority.rawValue).tag(priority)
-                        }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Reassign") {
+                        reassignTask()
                     }
-                    .pickerStyle(SegmentedPickerStyle())
+                    .disabled(selectedAssignee == nil || selectedAssignee?.id == task.assignedTo)
                 }
+            }
+        }
+        .onAppear {
+            selectedAssignee = currentAssignee
+        }
+    }
+    
+    private func reassignTask() {
+        guard let assignee = selectedAssignee,
+              let assigneeId = assignee.id,
+              let currentUser = authViewModel.currentUser else { return }
+        
+        taskViewModel.assignTaskToUser(task, userId: assigneeId, userName: assignee.name)
+        
+        // Create notification for the new assignee if it's not the current user
+        if assigneeId != currentUser.id {
+            let notification = Notification(
+                title: "Task Reassigned",
+                message: "\(currentUser.name) assigned you a task: \(task.title)",
+                type: .taskAssigned,
+                recipientID: assigneeId,
+                senderID: currentUser.id
+            )
+            var notificationWithTask = notification
+            notificationWithTask.relatedTaskID = task.id
+            notificationWithTask.relatedGroupID = task.groupID
+            
+            taskViewModel.createNotification(notificationWithTask)
+        }
+        
+        presentationMode.wrappedValue.dismiss()
+    }
+}
+
+// MARK: - Placeholder Edit Task View
+struct EditTaskView: View {
+    let task: Task
+    @Environment(\.presentationMode) var presentationMode
+    
+    var body: some View {
+        NavigationView {
+            VStack {
+                Text("Edit Task Feature")
+                Text("Coming Soon...")
             }
             .navigationTitle("Edit Task")
             .navigationBarTitleDisplayMode(.inline)
@@ -233,131 +381,8 @@ struct EditTaskView: View {
                         presentationMode.wrappedValue.dismiss()
                     }
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") {
-                        saveTask()
-                    }
-                    .disabled(title.isEmpty)
-                }
             }
         }
-    }
-    
-    private func saveTask() {
-        task.title = title
-        task.description = description
-        task.dueDate = dueDate
-        task.priority = priority
-        
-        taskViewModel.updateTask(task)
-        presentationMode.wrappedValue.dismiss()
     }
 }
-
-struct AssignTaskView: View {
-    @Environment(\.presentationMode) var presentationMode
-    @EnvironmentObject var taskViewModel: TaskViewModel
-    let task: Task
-    let onAssign: (Task) -> Void
-    
-    @State private var selectedUserId: String?
-    @State private var users: [User] = []
-    @State private var isLoading = true
-    
-    var body: some View {
-        NavigationView {
-            Group {
-                if isLoading {
-                    ProgressView("Loading members...")
-                } else {
-                    List {
-                        if users.isEmpty {
-                            Text("No users available to assign")
-                                .foregroundColor(.secondary)
-                                .italic()
-                        } else {
-                            ForEach(users) { user in
-                                Button(action: {
-                                    selectedUserId = user.id
-                                }) {
-                                    HStack {
-                                        Image(systemName: "person.circle")
-                                            .foregroundColor(.blue)
-                                        
-                                        VStack(alignment: .leading) {
-                                            Text(user.name)
-                                                .font(.subheadline)
-                                            Text(user.email)
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                        }
-                                        
-                                        Spacer()
-                                        
-                                        if user.id == task.assignedTo {
-                                            Image(systemName: "checkmark")
-                                                .foregroundColor(.green)
-                                        } else if user.id == selectedUserId {
-                                            Image(systemName: "checkmark")
-                                                .foregroundColor(.blue)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Assign Task")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        presentationMode.wrappedValue.dismiss()
-                    }
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Assign") {
-                        assignTask()
-                    }
-                    .disabled(selectedUserId == nil || selectedUserId == task.assignedTo)
-                }
-            }
-            .onAppear {
-                loadUsers()
-            }
-        }
-    }
-    
-    private func loadUsers() {
-        // If task is part of a group, get group members
-        if let groupId = task.groupID, let group = taskViewModel.getGroup(for: groupId) {
-            users = group.members
-            isLoading = false
-        } else {
-            // For personal tasks or if group isn't loaded yet
-            taskViewModel.getAllUsers { fetchedUsers in
-                DispatchQueue.main.async {
-                    users = fetchedUsers
-                    isLoading = false
-                }
-            }
-        }
-    }
-    
-    private func assignTask() {
-        guard let userId = selectedUserId else { return }
-        
-        var updatedTask = task
-        updatedTask.assignedTo = userId
-        updatedTask.updatedAt = Date()
-        
-        taskViewModel.updateTask(updatedTask)
-        onAssign(updatedTask)
-        presentationMode.wrappedValue.dismiss()
-    }
-}
-
 
