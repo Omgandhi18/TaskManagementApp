@@ -148,13 +148,24 @@ struct AddTaskView: View {
         guard let currentUser = authViewModel.currentUser,
               let userId = currentUser.id else { return }
         
-        // Determine who the task should be assigned to
+        // Determine the assignee more clearly
+        let finalAssignee: User
         let assigneeId: String
+        
         if let selectedGroup = selectedGroup {
-            // For group tasks, use selected assignee or default to current user
-            assigneeId = selectedAssignee?.id ?? userId
+            // For group tasks
+            if let explicitAssignee = selectedAssignee {
+                // Someone was explicitly selected
+                finalAssignee = explicitAssignee
+                assigneeId = explicitAssignee.id ?? userId
+            } else {
+                // No one selected, default to current user
+                finalAssignee = currentUser
+                assigneeId = userId
+            }
         } else {
-            // For personal tasks, always assign to current user
+            // For personal tasks, always current user
+            finalAssignee = currentUser
             assigneeId = userId
         }
         
@@ -171,10 +182,11 @@ struct AddTaskView: View {
             tags: []
         )
         
+        // Add task to ViewModel
         taskViewModel.addTask(newTask)
         
-        // Create notification if task is assigned to someone else
-        if assigneeId != userId, let assignee = selectedAssignee {
+        // Create notification ONLY if task is assigned to someone else
+        if assigneeId != userId {
             let notification = Notification(
                 title: "New Task Assigned",
                 message: "\(currentUser.name) assigned you a task: \(title)",
@@ -187,6 +199,13 @@ struct AddTaskView: View {
             notificationWithTask.relatedGroupID = selectedGroup?.id
             
             taskViewModel.createNotification(notificationWithTask)
+            
+            print("📧 Notification created for task assignment:")
+            print("   - Task: \(title)")
+            print("   - Assigned to: \(finalAssignee.name)")
+            print("   - From: \(currentUser.name)")
+        } else {
+            print("ℹ️ Task assigned to self, no notification needed")
         }
         
         presentationMode.wrappedValue.dismiss()

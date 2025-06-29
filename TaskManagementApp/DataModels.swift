@@ -1023,44 +1023,72 @@ class TaskViewModel: ObservableObject {
         return "taskapp://join?code=\(group.inviteCode)&groupId=\(groupId)"
     }
     
-    func assignTaskToUser(_ task: Task, userId: String, userName: String) {
-        guard let taskId = task.id else { return }
-        
-        var updatedTask = task
-        updatedTask.assignedTo = userId
-        updatedTask.updatedAt = Date()
-        
-        do {
-            let taskData = try Firestore.Encoder().encode(updatedTask)
-            
-            db.collection("tasks").document(taskId).setData(taskData) { [weak self] error in
-                if let error = error {
-                    print("Error assigning task: \(error)")
-                    return
-                }
-                
-                // Update local array
-                DispatchQueue.main.async {
-                    if let index = self?.tasks.firstIndex(where: { $0.id == taskId }) {
-                        self?.tasks[index] = updatedTask
-                    }
-                }
-                
-                // Create a notification for the assigned user
-                var notification = Notification(
-                    title: "New Task Assigned",
-                    message: "You have been assigned a new task: \(task.title)",
-                    type: .taskAssigned,
-                    recipientID: userId,
-                    senderID: task.createdBy,
-                )
-                notification.relatedTaskID = taskId
-                
-                self?.createNotification(notification)
-            }
-        } catch {
-            print("Error encoding task: \(error)")
+    func assignTaskToUser(_ task: Task, userId: String, currentUserName: String) {
+        guard let taskId = task.id else {
+            print("❌ Cannot assign task: no task ID")
+            return
         }
+        
+        print("📋 Assigning task '\(task.title)' to user: \(userId)")
+        
+        // Update the task with new assignee
+        let updates: [String: Any] = [
+            "assignedTo": userId,
+            "updatedAt": Timestamp(date: Date())
+        ]
+        
+        db.collection("tasks").document(taskId).updateData(updates) { [weak self] error in
+            if let error = error {
+                print("❌ Error assigning task: \(error)")
+                return
+            }
+            
+            print("✅ Task assigned successfully")
+            
+            // Update local task
+            DispatchQueue.main.async {
+                if let index = self?.tasks.firstIndex(where: { $0.id == taskId }) {
+                    self?.tasks[index].assignedTo = userId
+                    self?.tasks[index].updatedAt = Date()
+                }
+            }
+            
+            // Create notification for the assigned user (if not assigning to self)
+            if userId != task.createdBy {
+                self?.createTaskAssignmentNotification(
+                    taskId: taskId,
+                    taskTitle: task.title,
+                    assignedToUserId: userId,
+                    assignedByUserId: task.createdBy,
+                    assignedByUserName: currentUserName
+                )
+            }
+        }
+    }
+    private func createTaskAssignmentNotification(
+        taskId: String,
+        taskTitle: String,
+        assignedToUserId: String,
+        assignedByUserId: String,
+        assignedByUserName: String
+    ) {
+        let notification = Notification(
+            title: "New Task Assigned",
+            message: "\(assignedByUserName) assigned you a task: \(taskTitle)",
+            type: .taskAssigned,
+            recipientID: assignedToUserId,
+            senderID: assignedByUserId
+        )
+        
+        var notificationWithDetails = notification
+        notificationWithDetails.relatedTaskID = taskId
+        
+        createNotification(notificationWithDetails)
+        
+        print("📧 Assignment notification created:")
+        print("   - To: \(assignedToUserId)")
+        print("   - Task: \(taskTitle)")
+        print("   - From: \(assignedByUserName)")
     }
     // MARK: - User Search
     func searchUsers(by email: String, completion: @escaping (Result<[User], Error>) -> Void) {
@@ -1113,67 +1141,112 @@ class TaskViewModel: ObservableObject {
     
     // Function to fetch all tasks assigned to a user, including group tasks
     func fetchAllUserTasks(for userId: String) {
-        // Create a combined listener for both personal and group tasks
+        print("🔍 Fetching all tasks for user: \(userId)")
         
-        // First, get user's groups to know which group tasks to listen to
-        db.collection("groups")
-            .whereField("memberIDs", arrayContains: userId)
-            .addSnapshotListener { [weak self] snapshot, error in
-                guard let groupDocuments = snapshot?.documents else {
-                    print("Error fetching groups for tasks: \(error?.localizedDescription ?? "Unknown error")")
+        // Create a more reliable task fetching system
+        
+        // 1. Listen to tasks directly assigned to the user
+        let personalTasksListener = db.collection("tasks")
+            .whereField("assignedTo", isEqualTo: userId)
+            .addSnapshotListener { [weak self] personalSnapshot, error in
+                if let error = error {
+                    print("❌ Error fetching personal tasks: \(error)")
                     return
                 }
                 
-                let groupIds = groupDocuments.compactMap { $0.documentID }
+                let personalTasks = personalSnapshot?.documents.compactMap {
+                    try? $0.data(as: Task.self)
+                } ?? []
                 
-                // Listen to personal tasks
-                self?.db.collection("tasks")
-                    .whereField("assignedTo", isEqualTo: userId)
-                    .addSnapshotListener { personalSnapshot, personalError in
-                        let personalTasks = personalSnapshot?.documents.compactMap {
-                            try? $0.data(as: Task.self)
-                        } ?? []
-                        
-                        if groupIds.isEmpty {
-                            // Only personal tasks
-                            DispatchQueue.main.async {
-                                self?.tasks = personalTasks
-                            }
-                        } else {
-                            // Also get group tasks
-                            self?.db.collection("tasks")
-                                .whereField("groupID", in: groupIds)
-                                .addSnapshotListener { groupSnapshot, groupError in
-                                    let groupTasks = groupSnapshot?.documents.compactMap {
-                                        try? $0.data(as: Task.self)
-                                    } ?? []
-                                    
-                                    // Combine and deduplicate tasks
-                                    DispatchQueue.main.async {
-                                        var uniqueTasks: [Task] = []
-                                        let allTasks = personalTasks + groupTasks
-                                        
-                                        for task in allTasks {
-                                            if !uniqueTasks.contains(where: { $0.id == task.id }) {
-                                                uniqueTasks.append(task)
-                                            }
-                                        }
-                                        
-                                        self?.tasks = uniqueTasks.sorted { task1, task2 in
-                                            // Sort by completion status first, then by due date
-                                            if task1.isCompleted != task2.isCompleted {
-                                                return !task1.isCompleted
-                                            }
-                                            if let date1 = task1.dueDate, let date2 = task2.dueDate {
-                                                return date1 < date2
-                                            }
-                                            return task1.createdAt > task2.createdAt
-                                        }
-                                    }
-                                }
-                        }
-                    }
+                print("📝 Found \(personalTasks.count) personal tasks")
+                
+                // Update tasks immediately with personal tasks
+                DispatchQueue.main.async {
+                    // Remove old personal tasks and add new ones
+                    self?.tasks.removeAll { $0.assignedTo == userId }
+                    self?.tasks.append(contentsOf: personalTasks)
+                    self?.sortTasks()
+                }
             }
+        
+        // 2. Also listen to tasks in groups where user is a member
+        // First get user's groups
+        let groupsListener = db.collection("groups")
+            .whereField("memberIDs", arrayContains: userId)
+            .addSnapshotListener { [weak self] groupSnapshot, error in
+                if let error = error {
+                    print("❌ Error fetching user groups: \(error)")
+                    return
+                }
+                
+                let userGroups = groupSnapshot?.documents.compactMap {
+                    try? $0.data(as: TaskGroup.self)
+                } ?? []
+                
+                // Update groups first
+                DispatchQueue.main.async {
+                    self?.groups = userGroups
+                }
+                
+                // Get group IDs for task fetching
+                let groupIds = userGroups.compactMap { $0.id }
+                
+                if !groupIds.isEmpty {
+                    // Listen to all tasks in user's groups
+                    let groupTasksListener = self?.db.collection("tasks")
+                        .whereField("groupID", in: groupIds)
+                        .addSnapshotListener { [weak self] groupTaskSnapshot, error in
+                            if let error = error {
+                                print("❌ Error fetching group tasks: \(error)")
+                                return
+                            }
+                            
+                            let groupTasks = groupTaskSnapshot?.documents.compactMap {
+                                try? $0.data(as: Task.self)
+                            } ?? []
+                            
+                            print("👥 Found \(groupTasks.count) group tasks")
+                            
+                            DispatchQueue.main.async {
+                                // Remove old group tasks and add new ones
+                                self?.tasks.removeAll { task in
+                                    groupIds.contains(task.groupID ?? "")
+                                }
+                                self?.tasks.append(contentsOf: groupTasks)
+                                self?.sortTasks()
+                            }
+                        }
+                }
+            }
+    }
+    private func sortTasks() {
+        tasks.sort { task1, task2 in
+            // Incomplete tasks first
+            if task1.isCompleted != task2.isCompleted {
+                return !task1.isCompleted
+            }
+            
+            // Then by priority (urgent first)
+            if task1.priority != task2.priority {
+                return task1.priority.sortOrder > task2.priority.sortOrder
+            }
+            
+            // Then by due date (soonest first)
+            if let date1 = task1.dueDate, let date2 = task2.dueDate {
+                return date1 < date2
+            }
+            
+            // Tasks with due dates come before those without
+            if task1.dueDate != nil && task2.dueDate == nil {
+                return true
+            }
+            if task1.dueDate == nil && task2.dueDate != nil {
+                return false
+            }
+            
+            // Finally by creation date (newest first)
+            return task1.createdAt > task2.createdAt
+        }
     }
     func getUserName(for userId: String?) -> String? {
         guard let userId = userId else { return nil }

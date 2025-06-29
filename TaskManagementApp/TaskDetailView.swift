@@ -340,7 +340,7 @@ struct ReassignTaskView: View {
               let assigneeId = assignee.id,
               let currentUser = authViewModel.currentUser else { return }
         
-        taskViewModel.assignTaskToUser(task, userId: assigneeId, userName: assignee.name)
+        taskViewModel.assignTaskToUser(task, userId: assigneeId, currentUserName: assignee.name)
         
         // Create notification for the new assignee if it's not the current user
         if assigneeId != currentUser.id {
