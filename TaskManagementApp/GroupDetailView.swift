@@ -107,7 +107,7 @@ struct GroupDetailView: View {
                         .italic()
                 } else {
                     ForEach(groupTasks) { task in
-                        NavigationLink(destination: TaskDetailView(task: task)) {
+                        NavigationLink(destination: TaskDetailView(taskId: task.id ?? "")) {
                             TaskRowView(task: task)
                         }
                     }

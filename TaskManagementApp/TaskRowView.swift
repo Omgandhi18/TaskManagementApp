@@ -20,7 +20,7 @@ struct TaskRowView: View {
     }
     
     var body: some View {
-        NavigationLink(destination: TaskDetailView(task: task)) {
+        NavigationLink(destination: TaskDetailView(taskId: task.id ?? "")) {
             HStack {
                 Button(action: {
                     // Update local state immediately for instant UI feedback
